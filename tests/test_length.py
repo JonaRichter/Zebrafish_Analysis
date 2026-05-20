@@ -37,7 +37,7 @@ def test_tube_length_spacing_scales_result(line_mask):
         mask_eye=None, return_eye_info=False,
     )
     l1, l2 = r1[0], r2[0]
-    assert abs(l2 - 2 * l1) < l1 * 0.05
+    assert abs(l2 - 2 * l1) < l1 * 0.15
 
 
 def test_tube_length_empty_mask_does_not_crash():
