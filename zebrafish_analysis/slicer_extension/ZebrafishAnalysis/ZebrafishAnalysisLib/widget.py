@@ -312,7 +312,7 @@ class ZebrafishAnalysisMainWidget:
     def _on_gallery_select(self, index: int):
         self._current_detail_idx = index
         self._tabs.setCurrentIndex(1)
-        self._detail.show_result(self._results[index])
+        self._detail.show_result(index, self._results)
         self._detail.setFocus()
 
     def _navigate_detail(self, delta: int):
@@ -323,6 +323,7 @@ class ZebrafishAnalysisMainWidget:
             self._on_gallery_select(idx)
 
     def _on_results_ready(self):
+        self._detail.invalidate_cache()
         self._gallery.populate(self._results)
         self._results_tab.populate(self._results)
         self._exclude_tab.populate(self._results)

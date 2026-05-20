@@ -1,11 +1,12 @@
 """
 Detail tab — full-resolution overlay + metrics for the selected image.
 
-show_result(result) — display a single result dict.
+show_result(index, results) — display result at index, preload neighbours.
 """
 
 import os
 import sys
+import threading
 
 # Ensure ZebrafishAnalysisLib is first on sys.path so 'overlay' resolves locally.
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -21,25 +22,40 @@ import numpy as np
 
 def _numpy_to_qpixmap(rgb_array: np.ndarray) -> "qt.QPixmap":
     from PIL import Image as PILImage
-    import tempfile
-    import os
+    import io
     arr = np.ascontiguousarray(rgb_array.clip(0, 255).astype("uint8"))
-    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-    try:
-        PILImage.fromarray(arr).save(tmp.name)
-        tmp.close()
-        return qt.QPixmap(tmp.name)
-    finally:
-        os.unlink(tmp.name)
+    buf = io.BytesIO()
+    PILImage.fromarray(arr).save(buf, format="BMP")  # BMP: no compression, fast encode
+    data = qt.QByteArray(buf.getvalue())
+    pixmap = qt.QPixmap()
+    pixmap.loadFromData(data)
+    return pixmap
+
+
+def _build_rgb_array(result: dict) -> np.ndarray:
+    """Pure numpy/OpenCV — safe to call from any thread."""
+    from overlay import make_full_overlay
+    import cv2
+    bgr = make_full_overlay(result)
+    return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
 
 class DetailTab(qt.QWidget):
     def __init__(self, on_navigate=None):
         super().__init__()
-        self._current_result = None
-        self._full_pixmap = None
         self._on_navigate = on_navigate
+        self._full_pixmap = None
+        self._results = []
+        self._current_idx = 0
+        self._cache = {}          # index → QPixmap  (main thread only)
+        self._jobs = set()        # indices currently being built
+        self._pending = {}        # index → rgb ndarray  (written by workers, read by poll)
         self.setFocusPolicy(qt.Qt.StrongFocus)
+
+        self._poll_timer = qt.QTimer()
+        self._poll_timer.setInterval(40)
+        self._poll_timer.timeout.connect(self._poll_pending)
+        self._poll_timer.start()
 
         self._image_label = qt.QLabel("Select an image from the Gallery.")
         self._image_label.setAlignment(qt.Qt.AlignCenter)
@@ -57,21 +73,76 @@ class DetailTab(qt.QWidget):
         layout.addWidget(self._image_label, 1)
         layout.addWidget(self._metrics_label, 0)
 
-    def show_result(self, result: dict) -> None:
-        self._current_result = result
-        self._full_pixmap = self._build_pixmap(result)
-        self._metrics_label.setText(_format_metrics(result))
-        qt.QTimer.singleShot(0, self._update_display)
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
-    def _build_pixmap(self, result: dict) -> "qt.QPixmap | None":
-        from overlay import make_full_overlay
-        import cv2
-        bgr = make_full_overlay(result)
-        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-        return _numpy_to_qpixmap(rgb)
+    def show_result(self, index: int, results: list) -> None:
+        self._results = results
+        self._current_idx = index
+        result = results[index]
+
+        self._metrics_label.setText(_format_metrics(result))
+
+        if index in self._cache:
+            self._full_pixmap = self._cache[index]
+            qt.QTimer.singleShot(0, self._update_display)
+        else:
+            self._image_label.setPixmap(qt.QPixmap())
+            self._image_label.setText("Loading…")
+            self._full_pixmap = None
+            self._start_job(index)
+
+        self._schedule_preload(index)
+
+    def invalidate_cache(self):
+        """Call after a new batch run so stale pixmaps are discarded."""
+        self._cache.clear()
+        self._jobs.clear()
+        self._pending.clear()
+
+    # ------------------------------------------------------------------
+    # Background loading
+    # ------------------------------------------------------------------
+
+    def _start_job(self, index: int) -> None:
+        if index in self._cache or index in self._jobs:
+            return
+        if index < 0 or index >= len(self._results):
+            return
+        result = self._results[index]
+        self._jobs.add(index)
+
+        def worker(idx=index, res=result):
+            rgb = _build_rgb_array(res)
+            self._pending[idx] = rgb  # CPython dict write is GIL-atomic
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _poll_pending(self) -> None:
+        """Main-thread timer: drain pending rgb arrays → QPixmap → cache."""
+        if not self._pending:
+            return
+        for idx, rgb in list(self._pending.items()):
+            del self._pending[idx]
+            self._jobs.discard(idx)
+            pixmap = _numpy_to_qpixmap(rgb)
+            self._cache[idx] = pixmap
+            if idx == self._current_idx and self._full_pixmap is None:
+                self._full_pixmap = pixmap
+                self._image_label.setText("")
+                self._update_display()
+
+    def _schedule_preload(self, center: int) -> None:
+        for offset in (-1, 1, -2, 2):
+            self._start_job(center + offset)
+
+    # ------------------------------------------------------------------
+    # Display
+    # ------------------------------------------------------------------
 
     def _update_display(self) -> None:
-        if self._full_pixmap is None:
+        if self._full_pixmap is None or self._full_pixmap.isNull():
             return
         scaled = self._full_pixmap.scaled(
             self._image_label.width,
