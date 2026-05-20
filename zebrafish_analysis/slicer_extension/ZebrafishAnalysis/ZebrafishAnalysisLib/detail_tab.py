@@ -34,10 +34,12 @@ def _numpy_to_qpixmap(rgb_array: np.ndarray) -> "qt.QPixmap":
 
 
 class DetailTab(qt.QWidget):
-    def __init__(self):
+    def __init__(self, on_navigate=None):
         super().__init__()
         self._current_result = None
         self._full_pixmap = None
+        self._on_navigate = on_navigate
+        self.setFocusPolicy(qt.Qt.StrongFocus)
 
         self._image_label = qt.QLabel("Select an image from the Gallery.")
         self._image_label.setAlignment(qt.Qt.AlignCenter)
@@ -78,6 +80,16 @@ class DetailTab(qt.QWidget):
             qt.Qt.SmoothTransformation,
         )
         self._image_label.setPixmap(scaled)
+
+    def keyPressEvent(self, event):
+        if self._on_navigate:
+            if event.key() == qt.Qt.Key_Right:
+                self._on_navigate(1)
+                return
+            if event.key() == qt.Qt.Key_Left:
+                self._on_navigate(-1)
+                return
+        super().keyPressEvent(event)
 
     def resizeEvent(self, event):
         self._update_display()

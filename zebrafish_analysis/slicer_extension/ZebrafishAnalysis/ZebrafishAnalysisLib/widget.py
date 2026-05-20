@@ -38,6 +38,7 @@ class ZebrafishAnalysisMainWidget:
         self._results = []
         self._excluded = set()
         self._image_paths = []
+        self._current_detail_idx = 0
 
         self._build_ui(parent_layout)
         self._connect_signals()
@@ -177,7 +178,7 @@ class ZebrafishAnalysisMainWidget:
         self._tabs.addTab(self._gallery, "Gallery")
 
         from detail_tab import DetailTab
-        self._detail = DetailTab()
+        self._detail = DetailTab(on_navigate=self._navigate_detail)
         self._tabs.addTab(self._detail, "Detail")
 
         from results_tab import ResultsTab
@@ -309,8 +310,17 @@ class ZebrafishAnalysisMainWidget:
         self._on_results_ready()
 
     def _on_gallery_select(self, index: int):
+        self._current_detail_idx = index
         self._tabs.setCurrentIndex(1)
         self._detail.show_result(self._results[index])
+        self._detail.setFocus()
+
+    def _navigate_detail(self, delta: int):
+        if not self._results:
+            return
+        idx = max(0, min(len(self._results) - 1, self._current_detail_idx + delta))
+        if idx != self._current_detail_idx:
+            self._on_gallery_select(idx)
 
     def _on_results_ready(self):
         self._gallery.populate(self._results)
