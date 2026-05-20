@@ -77,7 +77,8 @@ class GalleryTab(qt.QWidget):
 
         from overlay import make_overlay
 
-        for i, r in enumerate(results):
+        for i in range(len(results)):
+            r = results[i]
             thumb_rgb = make_overlay(r, thumbnail_size=THUMB_SIZE)
             pixmap    = _numpy_to_qpixmap(thumb_rgb)
 
@@ -94,10 +95,22 @@ class GalleryTab(qt.QWidget):
                 border = BORDER_OK
             label.setStyleSheet(f"border: {border};")
 
-            caption = qt.QLabel(_caption(r))
+            caption = qt.QLabel()
+            caption.setFixedWidth(THUMB_SIZE)
             caption.setAlignment(qt.Qt.AlignCenter)
-            caption.setWordWrap(True)
+            caption.setWordWrap(False)
             caption.setStyleSheet("font-size: 10px;")
+            caption.setToolTip(r["filename"])
+            _elided = caption.fontMetrics().elidedText(
+                r["filename"], qt.Qt.ElideRight, THUMB_SIZE
+            )
+            _mparts = []
+            if r.get("error"):
+                _mparts.append("ERROR")
+            else:
+                if r.get("length")    is not None: _mparts.append(f"{r['length']:.0f} µm")
+                if r.get("curvature") is not None: _mparts.append(f"Cls {r['curvature']}")
+            caption.setText(_elided + ("\n" + " | ".join(_mparts) if _mparts else ""))
 
             cell = qt.QWidget()
             cell_layout = qt.QVBoxLayout(cell)
@@ -111,12 +124,3 @@ class GalleryTab(qt.QWidget):
             self._thumbnails.append(label)
 
 
-def _caption(r: dict) -> str:
-    if r.get("error"):
-        return f"{r['filename']}\nERROR"
-    parts = []
-    if r.get("length") is not None:
-        parts.append(f"{r['length']:.0f} µm")
-    if r.get("curvature") is not None:
-        parts.append(f"Cls {r['curvature']}")
-    return r["filename"] + ("\n" + " | ".join(parts) if parts else "")
