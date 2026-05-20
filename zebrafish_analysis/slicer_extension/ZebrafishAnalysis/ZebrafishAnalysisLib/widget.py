@@ -173,7 +173,11 @@ class ZebrafishAnalysisMainWidget:
         self._gallery = GalleryTab(on_select=self._on_gallery_select)
         self._tabs.addTab(self._gallery, "Gallery")
 
-        for name in ("Detail", "Results", "Exclude"):
+        from detail_tab import DetailTab
+        self._detail = DetailTab()
+        self._tabs.addTab(self._detail, "Detail")
+
+        for name in ("Results", "Exclude"):
             placeholder = qt.QLabel(f"{name} tab — coming soon")
             placeholder.setAlignment(qt.Qt.AlignCenter)
             self._tabs.addTab(placeholder, name)
@@ -201,10 +205,12 @@ class ZebrafishAnalysisMainWidget:
         self._set_queue(paths)
 
     def _on_load_files(self):
-        paths, _ = qt.QFileDialog.getOpenFileNames(
+        paths = qt.QFileDialog.getOpenFileNames(
             None, "Select images", "",
             "Images (*.png *.tif *.tiff *.jpg *.jpeg)"
         )
+        if isinstance(paths, (list, tuple)) and paths and isinstance(paths[0], list):
+            paths = paths[0]  # Slicer Qt binding wraps in extra tuple
         if paths:
             self._set_queue(sorted(paths))
 
@@ -212,8 +218,18 @@ class ZebrafishAnalysisMainWidget:
         self._image_paths = paths
         self._queue_list.clear()
         import os
+        import cv2
+        stubs = []
         for p in paths:
             self._queue_list.addItem(os.path.basename(p))
+            img = cv2.imread(p)
+            if img is not None:
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            stubs.append({"filename": os.path.basename(p), "original": img,
+                          "mask": None, "error": None, "length": None})
+        self._results = stubs
+        self._gallery.populate(stubs)
+        self._tabs.setCurrentIndex(0)
 
     def _on_detect_scale(self):
         if not self._image_paths:
@@ -278,7 +294,8 @@ class ZebrafishAnalysisMainWidget:
         self._on_results_ready()
 
     def _on_gallery_select(self, index: int):
-        self._tabs.setCurrentIndex(1)  # switch to Detail tab
+        self._tabs.setCurrentIndex(1)
+        self._detail.show_result(self._results[index])
 
     def _on_results_ready(self):
         self._gallery.populate(self._results)
