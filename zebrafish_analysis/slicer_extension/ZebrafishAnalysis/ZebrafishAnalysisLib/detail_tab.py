@@ -37,13 +37,14 @@ class DetailTab(qt.QWidget):
     def __init__(self):
         super().__init__()
         self._current_result = None
+        self._full_pixmap = None
 
         self._image_label = qt.QLabel("Select an image from the Gallery.")
         self._image_label.setAlignment(qt.Qt.AlignCenter)
         self._image_label.setStyleSheet("background: #1a1a1a; color: #666;")
         self._image_label.setMinimumHeight(300)
         self._image_label.setSizePolicy(
-            qt.QSizePolicy.Expanding, qt.QSizePolicy.Expanding
+            qt.QSizePolicy.Ignored, qt.QSizePolicy.Ignored
         )
 
         self._metrics_label = qt.QLabel("")
@@ -56,29 +57,30 @@ class DetailTab(qt.QWidget):
 
     def show_result(self, result: dict) -> None:
         self._current_result = result
-        self._render()
+        self._full_pixmap = self._build_pixmap(result)
+        self._metrics_label.setText(_format_metrics(result))
+        qt.QTimer.singleShot(0, self._update_display)
 
-    def _render(self) -> None:
-        if self._current_result is None:
-            return
+    def _build_pixmap(self, result: dict) -> "qt.QPixmap | None":
         from overlay import make_full_overlay
         import cv2
-
-        bgr = make_full_overlay(self._current_result)
+        bgr = make_full_overlay(result)
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-        pixmap = _numpy_to_qpixmap(rgb)
+        return _numpy_to_qpixmap(rgb)
 
-        scaled = pixmap.scaled(
+    def _update_display(self) -> None:
+        if self._full_pixmap is None:
+            return
+        scaled = self._full_pixmap.scaled(
             self._image_label.width,
             self._image_label.height,
             qt.Qt.KeepAspectRatio,
             qt.Qt.SmoothTransformation,
         )
         self._image_label.setPixmap(scaled)
-        self._metrics_label.setText(_format_metrics(self._current_result))
 
     def resizeEvent(self, event):
-        self._render()
+        self._update_display()
 
 
 def _format_metrics(r: dict) -> str:

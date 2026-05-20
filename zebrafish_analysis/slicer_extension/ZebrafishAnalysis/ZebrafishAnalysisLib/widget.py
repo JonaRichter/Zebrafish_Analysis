@@ -43,9 +43,12 @@ class ZebrafishAnalysisMainWidget:
         self._connect_signals()
 
     def _build_ui(self, layout):
+        layout.setAlignment(qt.Qt.Alignment())  # clear AlignTop set by Slicer base class
+
         splitter = qt.QSplitter(qt.Qt.Horizontal)
         splitter.setChildrenCollapsible(False)
-        layout.addWidget(splitter)
+        splitter.setSizePolicy(qt.QSizePolicy.Expanding, qt.QSizePolicy.Expanding)
+        layout.addWidget(splitter, 1)  # stretch=1 → fills all available vertical space
 
         self._build_left_panel(splitter)
         self._build_right_panel(splitter)
