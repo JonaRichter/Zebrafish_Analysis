@@ -27,6 +27,16 @@ BORDER_WARN  = "2px solid #FFC107"
 BORDER_ERROR = "2px solid #F44336"
 
 
+class _ClickableLabel(qt.QLabel):
+    def __init__(self, idx, on_select):
+        super().__init__()
+        self._idx = idx
+        self._on_select = on_select
+
+    def mousePressEvent(self, event):
+        self._on_select(self._idx)
+
+
 def _numpy_to_qpixmap(rgb_array: np.ndarray) -> "qt.QPixmap":
     from PIL import Image as PILImage
     import tempfile
@@ -71,7 +81,7 @@ class GalleryTab(qt.QWidget):
             thumb_rgb = make_overlay(r, thumbnail_size=THUMB_SIZE)
             pixmap    = _numpy_to_qpixmap(thumb_rgb)
 
-            label = qt.QLabel()
+            label = _ClickableLabel(i, self._on_select)
             label.setPixmap(pixmap)
             label.setFixedSize(THUMB_SIZE, THUMB_SIZE)
             label.setScaledContents(True)
@@ -95,9 +105,6 @@ class GalleryTab(qt.QWidget):
             cell_layout.setSpacing(2)
             cell_layout.addWidget(label)
             cell_layout.addWidget(caption)
-
-            idx = i
-            label.mousePressEvent = lambda _event, _i=idx: self._on_select(_i)
 
             row, col = divmod(i, GRID_COLUMNS)
             self._grid.addWidget(cell, row, col)
