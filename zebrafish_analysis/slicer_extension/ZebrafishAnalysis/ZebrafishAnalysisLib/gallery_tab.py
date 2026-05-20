@@ -21,7 +21,6 @@ import numpy as np
 
 
 THUMB_SIZE   = 150
-GRID_COLUMNS = 4
 BORDER_OK    = "2px solid #4CAF50"
 BORDER_WARN  = "2px solid #FFC107"
 BORDER_ERROR = "2px solid #F44336"
@@ -56,6 +55,8 @@ class GalleryTab(qt.QWidget):
         super().__init__()
         self._on_select = on_select
         self._thumbnails = []
+        self._cells = []
+        self._n_cols = 0
 
         scroll = qt.QScrollArea()
         scroll.setWidgetResizable(True)
@@ -74,6 +75,8 @@ class GalleryTab(qt.QWidget):
             if item.widget():
                 item.widget().deleteLater()
         self._thumbnails = []
+        self._cells = []
+        self._n_cols = 0
 
         from overlay import make_overlay
 
@@ -119,8 +122,24 @@ class GalleryTab(qt.QWidget):
             cell_layout.addWidget(label)
             cell_layout.addWidget(caption)
 
-            row, col = divmod(i, GRID_COLUMNS)
-            self._grid.addWidget(cell, row, col)
+            self._cells.append(cell)
             self._thumbnails.append(label)
+
+        self._reflow()
+
+    def _reflow(self):
+        if not self._cells:
+            return
+        spacing = self._grid.spacing
+        cols = max(1, self.width // (THUMB_SIZE + spacing))
+        if cols == self._n_cols:
+            return
+        self._n_cols = cols
+        for i, cell in enumerate(self._cells):
+            row, col = divmod(i, cols)
+            self._grid.addWidget(cell, row, col)
+
+    def resizeEvent(self, event):
+        self._reflow()
 
 
