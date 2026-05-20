@@ -5,6 +5,21 @@ Left panel: input, analysis toggles, model selection, scalebar, run, export.
 Right panel: QTabWidget with Gallery / Detail / Results / Exclude tabs.
 """
 
+import importlib.util
+import os
+import sys
+
+# Put our lib dir first and evict any cached Slicer modules with the same name.
+_LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+elif sys.path[0] != _LIB_DIR:
+    sys.path.remove(_LIB_DIR)
+    sys.path.insert(0, _LIB_DIR)
+
+for _m in ("logic", "overlay", "export"):
+    sys.modules.pop(_m, None)
+
 import qt
 import ctk
 import slicer
@@ -154,7 +169,11 @@ class ZebrafishAnalysisMainWidget:
         self._tabs = qt.QTabWidget()
         splitter.addWidget(self._tabs)
 
-        for name in ("Gallery", "Detail", "Results", "Exclude"):
+        from gallery_tab import GalleryTab
+        self._gallery = GalleryTab(on_select=self._on_gallery_select)
+        self._tabs.addTab(self._gallery, "Gallery")
+
+        for name in ("Detail", "Results", "Exclude"):
             placeholder = qt.QLabel(f"{name} tab — coming soon")
             placeholder.setAlignment(qt.Qt.AlignCenter)
             self._tabs.addTab(placeholder, name)
@@ -258,7 +277,12 @@ class ZebrafishAnalysisMainWidget:
         self._progress.setVisible(False)
         self._on_results_ready()
 
+    def _on_gallery_select(self, index: int):
+        self._tabs.setCurrentIndex(1)  # switch to Detail tab
+
     def _on_results_ready(self):
+        self._gallery.populate(self._results)
+        self._tabs.setCurrentIndex(0)
         errors = [r for r in self._results if r.get("error")]
         if errors:
             msg = "\n".join(f"• {r['filename']}: {r['error']}" for r in errors)
