@@ -6,3 +6,7 @@ slicerMacroBuildScriptedModule(
   RESOURCES
     Resources/Icons/${MODULE_NAME}.png
 )
+
+if(BUILD_TESTING)
+  add_subdirectory(Testing)
+endif()
