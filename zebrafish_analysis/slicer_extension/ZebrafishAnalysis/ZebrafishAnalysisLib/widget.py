@@ -74,7 +74,7 @@ class ZebrafishAnalysisMainWidget:
 
         splitter = qt.QSplitter(qt.Qt.Horizontal)
         splitter.setChildrenCollapsible(False)
-        splitter.setHandleWidth(0)  # left panel is fixed-width; handle not needed
+        splitter.setHandleWidth(4)
         splitter.setSizePolicy(qt.QSizePolicy.Expanding, qt.QSizePolicy.Expanding)
         layout.addWidget(splitter, 1)  # stretch=1 → fills all available vertical space
 
@@ -88,7 +88,8 @@ class ZebrafishAnalysisMainWidget:
 
     def _build_left_panel(self, splitter):
         left = qt.QWidget()
-        left.setFixedWidth(275)
+        left.setMinimumWidth(200)
+        left.setMaximumWidth(500)
         vbox = qt.QVBoxLayout(left)
         vbox.setContentsMargins(4, 4, 4, 4)
         vbox.setSpacing(6)
