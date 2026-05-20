@@ -1,0 +1,50 @@
+"""
+Exclude tab — checkboxes to mark images for exclusion from export.
+
+on_change callback(excluded_set) is called whenever the set changes.
+"""
+
+import qt
+
+
+class ExcludeTab(qt.QWidget):
+    def __init__(self, on_change):
+        super().__init__()
+        self._on_change = on_change
+        self._checkboxes = []
+
+        self._table = qt.QTableWidget(0, 2)
+        self._table.setHorizontalHeaderLabels(["Filename", "Exclude"])
+        self._table.horizontalHeader().setSectionResizeMode(
+            0, qt.QHeaderView.Stretch
+        )
+        self._table.setEditTriggers(qt.QAbstractItemView.NoEditTriggers)
+
+        layout = qt.QVBoxLayout(self)
+        layout.addWidget(self._table)
+
+    def populate(self, results: list) -> None:
+        self._table.setRowCount(0)
+        self._checkboxes = []
+
+        for r in results:
+            row = self._table.rowCount()
+            self._table.insertRow(row)
+
+            name_item = qt.QTableWidgetItem(r["filename"])
+            self._table.setItem(row, 0, name_item)
+
+            chk = qt.QCheckBox()
+            chk.setChecked(bool(r.get("error")))
+
+            filename = r["filename"]
+            chk.toggled.connect(lambda _checked, _fn=filename: self._notify())
+            self._table.setCellWidget(row, 1, chk)
+            self._checkboxes.append((filename, chk))
+
+    def _notify(self):
+        excluded = {fn for fn, chk in self._checkboxes if chk.isChecked()}
+        self._on_change(excluded)
+
+    def get_excluded(self) -> set:
+        return {fn for fn, chk in self._checkboxes if chk.isChecked()}

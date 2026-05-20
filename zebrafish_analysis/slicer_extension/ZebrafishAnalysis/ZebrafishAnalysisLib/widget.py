@@ -177,10 +177,13 @@ class ZebrafishAnalysisMainWidget:
         self._detail = DetailTab()
         self._tabs.addTab(self._detail, "Detail")
 
-        for name in ("Results", "Exclude"):
-            placeholder = qt.QLabel(f"{name} tab — coming soon")
-            placeholder.setAlignment(qt.Qt.AlignCenter)
-            self._tabs.addTab(placeholder, name)
+        from results_tab import ResultsTab
+        self._results_tab = ResultsTab()
+        self._tabs.addTab(self._results_tab, "Results")
+
+        from exclude_tab import ExcludeTab
+        self._exclude_tab = ExcludeTab(on_change=lambda exc: setattr(self, "_excluded", exc))
+        self._tabs.addTab(self._exclude_tab, "Exclude")
 
     def _connect_signals(self):
         self._btn_folder.clicked.connect(self._on_load_folder)
@@ -299,6 +302,8 @@ class ZebrafishAnalysisMainWidget:
 
     def _on_results_ready(self):
         self._gallery.populate(self._results)
+        self._results_tab.populate(self._results)
+        self._exclude_tab.populate(self._results)
         self._tabs.setCurrentIndex(0)
         errors = [r for r in self._results if r.get("error")]
         if errors:
