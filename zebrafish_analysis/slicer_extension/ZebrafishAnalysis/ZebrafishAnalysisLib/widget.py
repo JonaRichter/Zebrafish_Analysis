@@ -284,7 +284,7 @@ class ZebrafishAnalysisMainWidget:
         self._progress.setVisible(True)
         self._progress.setRange(0, len(self._image_paths))
 
-        model_data = self._model_combo.currentData()
+        model_data = self._model_combo.currentData
         body_file, body_enc, eye_file = model_data
 
         params = {
