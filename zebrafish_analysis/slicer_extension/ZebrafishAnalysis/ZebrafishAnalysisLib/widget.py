@@ -35,6 +35,22 @@ class ZebrafishAnalysisMainWidget:
             slicer.vtkMRMLLayoutNode.SlicerLayoutOneUpRedSliceView
         )
 
+        _mw = slicer.util.mainWindow()
+
+        # Bottom dock spans full width (corners go to bottom area, not left/right)
+        _mw.setCorner(qt.Qt.BottomLeftCorner,  qt.Qt.BottomDockWidgetArea)
+        _mw.setCorner(qt.Qt.BottomRightCorner, qt.Qt.BottomDockWidgetArea)
+
+        # Dock Python console below everything
+        _pyDock = _mw.findChild(qt.QDockWidget, "PythonConsoleDockWidget")
+        if _pyDock:
+            _pyDock.setFloating(False)
+            _mw.addDockWidget(qt.Qt.BottomDockWidgetArea, _pyDock)
+
+        # Collapse the central slice view and expand module panel to full width.
+        # Deferred so the window geometry is finalised before resizing.
+        qt.QTimer.singleShot(0, self._expand_panel)
+
         self._results = []
         self._excluded = set()
         self._image_paths = []
@@ -43,11 +59,22 @@ class ZebrafishAnalysisMainWidget:
         self._build_ui(parent_layout)
         self._connect_signals()
 
+    def _expand_panel(self):
+        mw = slicer.util.mainWindow()
+        central = mw.centralWidget()
+        if central:
+            central.setMinimumWidth(0)
+            central.hide()
+        panelDock = mw.findChild(qt.QDockWidget, "PanelDockWidget")
+        if panelDock:
+            mw.resizeDocks([panelDock], [mw.width], qt.Qt.Horizontal)
+
     def _build_ui(self, layout):
         layout.setAlignment(qt.Qt.Alignment())  # clear AlignTop set by Slicer base class
 
         splitter = qt.QSplitter(qt.Qt.Horizontal)
         splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(0)  # left panel is fixed-width; handle not needed
         splitter.setSizePolicy(qt.QSizePolicy.Expanding, qt.QSizePolicy.Expanding)
         layout.addWidget(splitter, 1)  # stretch=1 → fills all available vertical space
 
