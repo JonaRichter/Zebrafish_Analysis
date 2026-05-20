@@ -240,14 +240,23 @@ class ZebrafishAnalysisMainWidget:
             return
         result = detect_scalebar(self._image_paths[0])
         if result.get("bar_found"):
-            self._um_per_px.value = result["scale_um_per_px"]
-            self._scale_status.setText(
-                f"Detected: {result['scale_um_per_px']:.4f} µm/px"
-            )
+            um_per_px = result.get("scale_um_per_px")
+            bar_px = result.get("bar_length_px")
+            if um_per_px is not None:
+                self._um_per_px.value = um_per_px
+                self._scale_status.setText(f"Detected: {um_per_px:.4f} µm/px")
+                self._scale_status.setStyleSheet("color: #4CAF50;")
+            else:
+                bar_info = f"  ({bar_px:.0f} px)" if bar_px is not None else ""
+                self._scale_status.setText(
+                    f"Bar found{bar_info}. Enter physical length (µm) + click Apply."
+                )
+                self._scale_status.setStyleSheet("color: #FFC107;")
         else:
             self._scale_status.setText(
-                "Not detected. Enter bar length + click Apply, or set µm/px directly."
+                "No scalebar detected. Enter µm/px directly."
             )
+            self._scale_status.setStyleSheet("color: #F44336;")
 
     def _on_apply_scale(self):
         text = self._bar_um_edit.text.strip()
