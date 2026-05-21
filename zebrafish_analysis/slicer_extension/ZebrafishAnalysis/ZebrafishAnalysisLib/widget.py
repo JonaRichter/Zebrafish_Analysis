@@ -111,6 +111,7 @@ class ZebrafishAnalysisMainWidget:
         input_box = ctk.ctkCollapsibleButton()
         input_box.text = "Input"
         vbox.addWidget(input_box)
+        input_box.setSizePolicy(qt.QSizePolicy.Preferred, qt.QSizePolicy.Maximum)
         in_layout = qt.QVBoxLayout(input_box)
 
         self._btn_folder = qt.QPushButton("Load Folder…")
@@ -121,10 +122,12 @@ class ZebrafishAnalysisMainWidget:
         self._queue_list = qt.QListWidget()
         self._queue_list.setMaximumHeight(120)
         in_layout.addWidget(self._queue_list)
+        in_layout.addStretch()
 
         analysis_box = ctk.ctkCollapsibleButton()
         analysis_box.text = "Analysis"
         vbox.addWidget(analysis_box)
+        analysis_box.setSizePolicy(qt.QSizePolicy.Preferred, qt.QSizePolicy.Maximum)
         an_layout = qt.QVBoxLayout(analysis_box)
 
         self._chk_length    = qt.QCheckBox("Body length");        self._chk_length.setChecked(True)
@@ -144,6 +147,7 @@ class ZebrafishAnalysisMainWidget:
         self._threshold_slider.value      = 0.85
         self._threshold_slider.decimals   = 2
         an_layout.addWidget(self._threshold_slider)
+        an_layout.addStretch()
 
         model_box = ctk.ctkCollapsibleButton()
         model_box.text      = "Model"
@@ -208,7 +212,6 @@ class ZebrafishAnalysisMainWidget:
         ex_layout.addWidget(self._btn_excel)
         ex_layout.addWidget(self._btn_csv)
 
-        vbox.addStretch()
 
     def _build_right_panel(self, splitter):
         self._tabs = qt.QTabWidget()
@@ -290,6 +293,9 @@ class ZebrafishAnalysisMainWidget:
             bar_px = result.get("bar_length_px")
             if um_per_px is not None:
                 self._um_per_px.value = um_per_px
+                label_detected = result.get("label_um_detected")
+                if label_detected is not None:
+                    self._bar_um_edit.text = f"{label_detected:.0f}"
                 self._scale_status.setText(f"Detected: {um_per_px:.4f} µm/px")
                 self._scale_status.setStyleSheet("color: #4CAF50;")
             else:
