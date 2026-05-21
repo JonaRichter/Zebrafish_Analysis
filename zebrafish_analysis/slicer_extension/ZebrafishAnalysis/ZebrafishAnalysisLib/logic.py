@@ -9,6 +9,11 @@ Path setup (sys.path) is handled by ZebrafishAnalysis.py, not here.
 Export functions (export_excel, export_csv) live in export.py.
 """
 
+import os
+import tempfile
+import numpy as np  # must precede torch imports to enable the numpy bridge
+import cv2
+
 from zebrafish_analysis.core.seg import segmentation_pipeline
 from zebrafish_analysis.core.length import (
     load_model,
@@ -17,10 +22,6 @@ from zebrafish_analysis.core.length import (
     compute_eye_metrics,
 )
 from zebrafish_analysis.core.scalebar import detect_scalebar as _detect_scalebar
-
-import os
-import cv2
-import numpy as np
 
 _MODEL_CACHE: dict = {}
 
@@ -116,14 +117,34 @@ def analyse_images(image_paths: list, params: dict,
         curv_model = None
 
     # ---- segmentation (all images at once) ----
-    seg_result = segmentation_pipeline(
-        file_list=sorted(image_paths),
-        include_eyes=include_eyes,
-        body_model_filename=body_filename,
-        body_encoder_name=body_encoder,
-        eye_model_filename=eye_filename,
-        body_force_download=force_download,
-    )
+    # segmentation_pipeline takes a folder_path; symlink selected files into a temp dir
+    _IMG_EXTS = ('.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif')
+    with tempfile.TemporaryDirectory() as _tmp:
+        name_to_path: dict = {}
+        for p in image_paths:
+            name = os.path.basename(p)
+            if name in name_to_path:
+                raise ValueError(f"Duplicate filename '{name}' in image list.")
+            name_to_path[name] = p
+            os.symlink(p, os.path.join(_tmp, name))
+
+        _seg_kwargs = dict(
+            include_eyes=include_eyes,
+            body_model_filename=body_filename,
+            body_encoder_name=body_encoder,
+            body_force_download=force_download,
+        )
+        if include_eyes and eye_filename:
+            _seg_kwargs["eye_model_filename"] = eye_filename
+        seg_result = segmentation_pipeline(_tmp, **_seg_kwargs)
+
+        # capture order before temp dir is cleaned up (mirrors load_images_from_path)
+        _ordered_names = [
+            f for f in os.listdir(_tmp)
+            if f.lower().endswith(_IMG_EXTS)
+        ]
+
+    name_to_seg_idx = {name: idx for idx, name in enumerate(_ordered_names)}
 
     if include_eyes and len(seg_result) == 4:
         originals_bgr, masks, growns, eyes = seg_result
@@ -134,13 +155,20 @@ def analyse_images(image_paths: list, params: dict,
     n = len(image_paths)
     results = []
 
-    for i, image_path in enumerate(sorted(image_paths)):
+    for _loop_i, image_path in enumerate(sorted(image_paths)):
         if progress_callback:
-            progress_callback(i, n)
+            progress_callback(_loop_i, n)
 
         r = _empty_result(image_path)
 
         try:
+            _name = os.path.basename(image_path)
+            i = name_to_seg_idx.get(_name)
+            if i is None:
+                r["error"] = f"Segmentation result not found for {_name}."
+                results.append(r)
+                continue
+
             orig_bgr = originals_bgr[i]
             if orig_bgr is None:
                 r["error"] = "Could not read image."
