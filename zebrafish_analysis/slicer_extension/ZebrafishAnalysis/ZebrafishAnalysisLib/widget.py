@@ -113,6 +113,7 @@ class ZebrafishAnalysisMainWidget:
         self._queue_list = qt.QListWidget()
         self._queue_list.setMaximumHeight(120)
         in_layout.addWidget(self._queue_list)
+        in_layout.addStretch()
 
         analysis_box = ctk.ctkCollapsibleButton()
         analysis_box.text = "Analysis"
