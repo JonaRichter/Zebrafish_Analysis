@@ -69,9 +69,33 @@ class DetailTab(qt.QWidget):
         self._metrics_label.setWordWrap(True)
         self._metrics_label.setStyleSheet("font-size: 12px; padding: 4px;")
 
+        self._btn_prev = qt.QPushButton("◄")
+        self._btn_next = qt.QPushButton("►")
+        self._nav_label = qt.QLabel("")
+        self._nav_label.setAlignment(qt.Qt.AlignCenter)
+
+        for btn in (self._btn_prev, self._btn_next):
+            btn.setFixedWidth(48)
+            btn.setFixedHeight(32)
+            btn.setStyleSheet("font-size: 16px;")
+
+        self._btn_prev.clicked.connect(lambda: self._on_navigate and self._on_navigate(-1))
+        self._btn_next.clicked.connect(lambda: self._on_navigate and self._on_navigate(1))
+
+        _nav_row = qt.QHBoxLayout()
+        _nav_row.addStretch(1)
+        _nav_row.addWidget(self._btn_prev)
+        _nav_row.addWidget(self._nav_label)
+        _nav_row.addWidget(self._btn_next)
+        _nav_row.addStretch(1)
+
         layout = qt.QVBoxLayout(self)
         layout.addWidget(self._image_label, 1)
+        layout.addLayout(_nav_row, 0)
         layout.addWidget(self._metrics_label, 0)
+
+        self._btn_prev.setEnabled(False)
+        self._btn_next.setEnabled(False)
 
     # ------------------------------------------------------------------
     # Public API
@@ -94,12 +118,22 @@ class DetailTab(qt.QWidget):
             self._start_job(index)
 
         self._schedule_preload(index)
+        self._update_nav_state()
 
     def invalidate_cache(self):
         """Call after a new batch run so stale pixmaps are discarded."""
         self._cache.clear()
         self._jobs.clear()
         self._pending.clear()
+
+    def _update_nav_state(self) -> None:
+        n = len(self._results)
+        self._btn_prev.setEnabled(self._current_idx > 0)
+        self._btn_next.setEnabled(self._current_idx < n - 1)
+        if n > 0:
+            self._nav_label.setText(f"{self._current_idx + 1} / {n}")
+        else:
+            self._nav_label.setText("")
 
     # ------------------------------------------------------------------
     # Background loading
