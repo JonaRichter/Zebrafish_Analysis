@@ -16,6 +16,32 @@ import numpy as np
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+def _detect_label_ocr(rgb_region: np.ndarray) -> Optional[float]:
+    """OCR a small image region and return the scale bar physical length in µm.
+
+    Parses patterns like '500 µm', '1000 um', '0.5 mm', '200 nm'.
+    Returns None when pytesseract/tesseract unavailable or no match found.
+    """
+    try:
+        import re
+        import pytesseract
+        text = pytesseract.image_to_string(
+            rgb_region,
+            config="--psm 6 -c tessedit_char_whitelist=0123456789.µuμmn ",
+        )
+        match = re.search(
+            r"(\d+\.?\d*)\s*(µm|um|μm|nm|mm)", text, re.IGNORECASE
+        )
+        if not match:
+            return None
+        value = float(match.group(1))
+        unit = match.group(2).lower()
+        conversions = {"µm": 1.0, "um": 1.0, "μm": 1.0, "nm": 0.001, "mm": 1000.0}
+        return value * conversions.get(unit, 1.0)
+    except Exception:
+        return None
+
+
 def _find_scalebar_line(gray_crop: np.ndarray,
                         full_img_width: int) -> Optional[Dict]:
     """
@@ -146,6 +172,23 @@ def detect_scalebar(img: np.ndarray,
     debug = rgb.copy()
     cv2.rectangle(debug, (ax, ay - 2), (ax + aw, ay + ah + 2),
                   (0, 220, 0), 2)
+
+    # TODO: auto-detect from TIFF metadata — hook for future µm/px from ImageJ/OME tags
+    if label_um is None:
+        _pad = 10
+        _ty1 = max(0, ay - 70)
+        _ty2 = min(h_full, ay + ah + _pad)
+        _tx1 = max(0, ax - _pad)
+        _tx2 = min(w_full, ax + aw + _pad)
+        _ocr_val = _detect_label_ocr(rgb[_ty1:_ty2, _tx1:_tx2])
+        if _ocr_val is not None:
+            label_um = _ocr_val
+            result['label_um_detected'] = _ocr_val
+            cv2.rectangle(debug, (_tx1, _ty1), (_tx2, _ty2), (255, 165, 0), 2)
+        else:
+            result['label_um_detected'] = None
+    else:
+        result['label_um_detected'] = None
 
     if label_um is not None and label_um > 0:
         scale_um_per_px = label_um / aw
