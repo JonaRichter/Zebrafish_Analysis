@@ -73,6 +73,9 @@ class ZebrafishAnalysisMainWidget:
         panelDock = mw.findChild(qt.QDockWidget, "PanelDockWidget")
         if panelDock:
             mw.resizeDocks([panelDock], [mw.width], qt.Qt.Horizontal)
+        dataProbe = mw.findChild(ctk.ctkCollapsibleButton, "DataProbeCollapsibleWidget")
+        if dataProbe:
+            dataProbe.collapsed = True
 
     def _build_ui(self, layout):
         layout.setAlignment(qt.Qt.Alignment())  # clear AlignTop set by Slicer base class
@@ -92,13 +95,18 @@ class ZebrafishAnalysisMainWidget:
         layout.addWidget(self._progress)
 
     def _build_left_panel(self, splitter):
+        scroll = qt.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(qt.Qt.ScrollBarAlwaysOff)
+        scroll.setMinimumWidth(200)
+        scroll.setMaximumWidth(500)
+        splitter.addWidget(scroll)
+
         left = qt.QWidget()
-        left.setMinimumWidth(200)
-        left.setMaximumWidth(500)
         vbox = qt.QVBoxLayout(left)
         vbox.setContentsMargins(4, 4, 4, 4)
         vbox.setSpacing(6)
-        splitter.addWidget(left)
+        scroll.setWidget(left)
 
         input_box = ctk.ctkCollapsibleButton()
         input_box.text = "Input"
@@ -113,7 +121,6 @@ class ZebrafishAnalysisMainWidget:
         self._queue_list = qt.QListWidget()
         self._queue_list.setMaximumHeight(120)
         in_layout.addWidget(self._queue_list)
-        in_layout.addStretch()
 
         analysis_box = ctk.ctkCollapsibleButton()
         analysis_box.text = "Analysis"
