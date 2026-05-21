@@ -25,18 +25,22 @@ def _detect_label_ocr(rgb_region: np.ndarray) -> Optional[float]:
     try:
         import re
         import pytesseract
-        text = pytesseract.image_to_string(
-            rgb_region,
-            config="--psm 6 -c tessedit_char_whitelist=0123456789.µuμmn ",
-        )
+        # Preprocess: grayscale → invert if dark background → upscale → threshold
+        gray = cv2.cvtColor(rgb_region, cv2.COLOR_RGB2GRAY)
+        if gray.mean() < 128:
+            gray = cv2.bitwise_not(gray)
+        gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+        _, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        text = pytesseract.image_to_string(bw, config="--psm 6")
+        # 'ym' is tesseract's consistent misread of 'µm'
         match = re.search(
-            r"(\d+\.?\d*)\s*(µm|um|μm|nm|mm)", text, re.IGNORECASE
+            r"(\d+\.?\d*)\s*(µm|um|μm|ym|nm|mm)", text, re.IGNORECASE
         )
         if not match:
             return None
         value = float(match.group(1))
         unit = match.group(2).lower()
-        conversions = {"µm": 1.0, "um": 1.0, "μm": 1.0, "nm": 0.001, "mm": 1000.0}
+        conversions = {"µm": 1.0, "um": 1.0, "μm": 1.0, "ym": 1.0, "nm": 0.001, "mm": 1000.0}
         return value * conversions.get(unit, 1.0)
     except Exception:
         return None
