@@ -120,6 +120,21 @@ class DetailTab(qt.QWidget):
         self._schedule_preload(index)
         self._update_nav_state()
 
+    def show_raw_image(self, rgb: np.ndarray, caption: str = "") -> None:
+        """Display an arbitrary RGB numpy array — used for scalebar preview."""
+        self._results = []
+        self._current_idx = 0
+        self._cache.clear()
+        self._jobs.clear()
+        self._pending.clear()
+        self._full_pixmap = _numpy_to_qpixmap(rgb)
+        self._metrics_label.setText(caption)
+        self._btn_prev.setEnabled(False)
+        self._btn_next.setEnabled(False)
+        self._nav_label.setText("")
+        self._image_label.setText("")
+        qt.QTimer.singleShot(0, self._update_display)
+
     def invalidate_cache(self):
         """Call after a new batch run so stale pixmaps are discarded."""
         self._cache.clear()

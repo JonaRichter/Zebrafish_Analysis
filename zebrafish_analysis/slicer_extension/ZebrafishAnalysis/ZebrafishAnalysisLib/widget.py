@@ -151,7 +151,7 @@ class ZebrafishAnalysisMainWidget:
 
         scale_box = ctk.ctkCollapsibleButton()
         scale_box.text      = "Scale bar"
-        scale_box.collapsed = True
+        scale_box.collapsed = False
         vbox.addWidget(scale_box)
         sc_layout = qt.QVBoxLayout(scale_box)
 
@@ -296,6 +296,13 @@ class ZebrafishAnalysisMainWidget:
                 "No scalebar detected. Enter µm/px directly."
             )
             self._scale_status.setStyleSheet("color: #F44336;")
+
+        if result.get("debug_img") is not None:
+            self._detail.show_raw_image(
+                result["debug_img"],
+                result.get("message", ""),
+            )
+            self._tabs.setCurrentIndex(1)
 
     def _on_apply_scale(self):
         from logic import detect_scalebar
