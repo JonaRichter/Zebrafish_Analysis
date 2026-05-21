@@ -134,10 +134,15 @@ class GalleryTab(qt.QWidget):
         cols = max(1, self.width // (THUMB_SIZE + spacing))
         if cols == self._n_cols:
             return
+        if self._n_cols > 0:
+            old_rows = (len(self._cells) - 1) // self._n_cols + 1
+            self._grid.setRowStretch(old_rows, 0)
         self._n_cols = cols
         for i, cell in enumerate(self._cells):
             row, col = divmod(i, cols)
             self._grid.addWidget(cell, row, col)
+        rows = (len(self._cells) - 1) // cols + 1
+        self._grid.setRowStretch(rows, 1)
 
     def resizeEvent(self, event):
         self._reflow()
