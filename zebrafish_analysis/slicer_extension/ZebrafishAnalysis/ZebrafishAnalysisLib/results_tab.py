@@ -24,17 +24,18 @@ class ResultsTab(qt.QWidget):
         self._table.horizontalHeader().setSectionResizeMode(
             0, qt.QHeaderView.Stretch
         )
-        self._table.setEditTriggers(qt.QAbstractItemView.NoEditTriggers)
-        self._table.setSelectionBehavior(qt.QAbstractItemView.SelectRows)
+        self._table.editTriggers = qt.QAbstractItemView.NoEditTriggers
+        self._table.selectionBehavior = qt.QAbstractItemView.SelectRows
 
         layout = qt.QVBoxLayout(self)
         layout.addWidget(self._table)
 
-    def populate(self, results: list) -> None:
-        self._table.setRowCount(0)
-        for r in results:
-            row = self._table.rowCount()
-            self._table.insertRow(row)
-            for col, (_, key, fmt) in enumerate(COLUMNS):
+    def populate(self, results) -> None:
+        n = len(results)
+        self._table.rowCount = n
+        for row in range(n):
+            r = results[row]
+            for col in range(len(COLUMNS)):
+                _, key, fmt = COLUMNS[col]
                 val = r.get(key)
                 self._table.setItem(row, col, qt.QTableWidgetItem(fmt(val)))

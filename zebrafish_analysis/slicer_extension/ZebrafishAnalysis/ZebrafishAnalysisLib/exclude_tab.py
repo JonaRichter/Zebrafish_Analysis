@@ -18,21 +18,18 @@ class ExcludeTab(qt.QWidget):
         self._table.horizontalHeader().setSectionResizeMode(
             0, qt.QHeaderView.Stretch
         )
-        self._table.setEditTriggers(qt.QAbstractItemView.NoEditTriggers)
+        self._table.editTriggers = qt.QAbstractItemView.NoEditTriggers
 
         layout = qt.QVBoxLayout(self)
         layout.addWidget(self._table)
 
-    def populate(self, results: list) -> None:
-        self._table.setRowCount(0)
+    def populate(self, results) -> None:
+        self._table.rowCount = len(results)
         self._checkboxes = []
 
-        for r in results:
-            row = self._table.rowCount()
-            self._table.insertRow(row)
-
-            name_item = qt.QTableWidgetItem(r["filename"])
-            self._table.setItem(row, 0, name_item)
+        for row in range(len(results)):
+            r = results[row]
+            self._table.setItem(row, 0, qt.QTableWidgetItem(r["filename"]))
 
             chk = qt.QCheckBox()
             chk.setChecked(bool(r.get("error")))
