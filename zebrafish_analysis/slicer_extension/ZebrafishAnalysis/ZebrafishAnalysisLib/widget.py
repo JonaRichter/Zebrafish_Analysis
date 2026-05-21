@@ -24,9 +24,6 @@ import qt
 import ctk
 import slicer
 
-from overlay   import make_overlay, make_full_overlay
-from logic     import detect_scalebar, analyse_images
-from export    import export_excel, export_csv
 
 
 class ZebrafishAnalysisMainWidget:
@@ -275,6 +272,7 @@ class ZebrafishAnalysisMainWidget:
         self._tabs.setCurrentIndex(0)
 
     def _on_detect_scale(self):
+        from logic import detect_scalebar
         if not self._image_paths:
             self._scale_status.setText("Load images first.")
             return
@@ -299,6 +297,7 @@ class ZebrafishAnalysisMainWidget:
             self._scale_status.setStyleSheet("color: #F44336;")
 
     def _on_apply_scale(self):
+        from logic import detect_scalebar
         text = self._bar_um_edit.text.strip()
         if not text or not self._image_paths:
             return
@@ -315,6 +314,7 @@ class ZebrafishAnalysisMainWidget:
             )
 
     def _on_run(self):
+        from logic import analyse_images
         if not self._image_paths:
             slicer.util.warningDisplay("No images loaded.")
             return
@@ -370,6 +370,7 @@ class ZebrafishAnalysisMainWidget:
             slicer.util.warningDisplay(f"Errors in {len(errors)} image(s):\n\n{msg}")
 
     def _on_export_excel(self):
+        from export import export_excel
         if not self._results:
             return
         path, _ = qt.QFileDialog.getSaveFileName(None, "Save Excel", "", "Excel (*.xlsx)")
@@ -378,6 +379,7 @@ class ZebrafishAnalysisMainWidget:
             export_excel(active, path)
 
     def _on_export_csv(self):
+        from export import export_csv
         if not self._results:
             return
         path, _ = qt.QFileDialog.getSaveFileName(None, "Save CSV", "", "CSV (*.csv)")
