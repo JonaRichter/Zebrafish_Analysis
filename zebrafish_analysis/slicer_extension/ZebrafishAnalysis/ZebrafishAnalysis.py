@@ -65,6 +65,20 @@ class ZebrafishAnalysisWidget(ScriptedLoadableModuleWidget):
         from widget import ZebrafishAnalysisMainWidget
         self._main = ZebrafishAnalysisMainWidget(self.layout)
 
+        qt.QTimer.singleShot(500, self._prewarm_imports)
+
+    def _prewarm_imports(self):
+        import threading
+
+        def _work():
+            try:
+                from zebrafish_analysis.core.seg import segmentation_pipeline    # noqa: F401
+                from zebrafish_analysis.core.length import load_model             # noqa: F401
+            except Exception:
+                pass
+
+        threading.Thread(target=_work, daemon=True).start()
+
     def cleanup(self):
         pass
 
