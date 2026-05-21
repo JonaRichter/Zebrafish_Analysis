@@ -20,18 +20,14 @@ TORCH_INDEX    = "https://download.pytorch.org/whl/cpu"
 
 
 def _is_importable(name: str) -> bool:
-    import importlib
+    import importlib.util
     import_name = {
         "scikit-image":                "skimage",
         "opencv-python-headless":      "cv2",
         "huggingface_hub":             "huggingface_hub",
         "segmentation_models_pytorch": "segmentation_models_pytorch",
     }.get(name, name)
-    try:
-        importlib.import_module(import_name)
-        return True
-    except ImportError:
-        return False
+    return importlib.util.find_spec(import_name) is not None
 
 
 def _numpy_major() -> int:
