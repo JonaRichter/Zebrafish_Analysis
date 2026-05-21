@@ -178,9 +178,10 @@ def detect_scalebar(img: np.ndarray,
                   (0, 220, 0), 2)
 
     # TODO: auto-detect from TIFF metadata — hook for future µm/px from ImageJ/OME tags
+    _ty1 = _tx1 = _tx2 = None  # OCR box coords — set only when OCR succeeds
     if label_um is None:
         _pad = 10
-        _ty1 = max(0, ay - 70)
+        _ty1 = max(0, ay - 28)
         _ty2 = min(h_full, ay + ah + _pad)
         _tx1 = max(0, ax - _pad)
         _tx2 = min(w_full, ax + aw + _pad)
@@ -188,7 +189,6 @@ def detect_scalebar(img: np.ndarray,
         if _ocr_val is not None:
             label_um = _ocr_val
             result['label_um_detected'] = _ocr_val
-            cv2.rectangle(debug, (_tx1, _ty1), (_tx2, _ty2), (255, 165, 0), 2)
         else:
             result['label_um_detected'] = None
     else:
@@ -208,17 +208,26 @@ def detect_scalebar(img: np.ndarray,
                 f'{scale_um_per_px * h_full:.1f} µm'
             ),
         )
-        cv2.putText(debug, f'{label_um:.0f} um / {aw} px',
-                    (ax, max(12, ay - 8)),
+        _txt = f'{label_um:.0f} um / {aw} px'
+        (tw, th), _bl = cv2.getTextSize(_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+        _tx = ax + (aw - tw) // 2
+        _ty = min(h_full - _bl - 4, ay + ah + th + 10)
+        cv2.putText(debug, _txt, (_tx, _ty),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 220, 0), 2,
                     cv2.LINE_AA)
+        if _ty1 is not None:
+            cv2.rectangle(debug, (_tx1, _ty1), (_tx2, _ty + _bl + 4),
+                          (255, 165, 0), 2)
     else:
         result['message'] = (
             f'Scale bar detected: {aw} px.  '
             f'Enter the physical length above and click "Apply" to calibrate.'
         )
-        cv2.putText(debug, f'bar = {aw} px',
-                    (ax, max(12, ay - 8)),
+        _txt2 = f'bar = {aw} px'
+        (tw2, th2), _bl2 = cv2.getTextSize(_txt2, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+        _tx2 = ax + (aw - tw2) // 2
+        _ty2 = min(h_full - _bl2 - 4, ay + ah + th2 + 10)
+        cv2.putText(debug, _txt2, (_tx2, _ty2),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 165, 0), 2,
                     cv2.LINE_AA)
 
