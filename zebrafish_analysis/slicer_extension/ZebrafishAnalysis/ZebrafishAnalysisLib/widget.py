@@ -46,6 +46,14 @@ class ZebrafishAnalysisMainWidget:
         if _pyDock:
             _pyDock.setFloating(False)
             _mw.addDockWidget(qt.Qt.BottomDockWidgetArea, _pyDock)
+            _pyDock.setMinimumHeight(1)
+            inner = _pyDock.widget()
+            if inner:
+                for w in [inner] + list(inner.findChildren(qt.QWidget)):
+                    w.setMinimumHeight(0)
+                    sp = w.sizePolicy
+                    sp.setVerticalPolicy(qt.QSizePolicy.Ignored)
+                    w.setSizePolicy(sp)
 
         # Collapse the central slice view and expand module panel to full width.
         # Deferred so the window geometry is finalised before resizing.
