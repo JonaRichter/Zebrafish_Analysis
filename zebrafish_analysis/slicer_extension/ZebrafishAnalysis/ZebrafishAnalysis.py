@@ -25,8 +25,8 @@ def _add_lib_to_path():
 _add_lib_to_path()
 
 _LIB_MODULES = (
-    "widget", "gallery_tab", "detail_tab", "logic", "overlay", "export",
-    "dependency_installer",
+    "widget", "gallery_tab", "detail_tab", "results_tab", "exclude_tab",
+    "logic", "overlay", "export", "dependency_installer",
 )
 
 def _evict_lib_modules():
