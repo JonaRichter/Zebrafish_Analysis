@@ -13,6 +13,7 @@ REQUIRED_PACKAGES = [
     "opencv-python-headless",
     "huggingface_hub",
     "openpyxl",
+    "pytesseract",
 ]
 
 TORCH_PACKAGES = ["torch", "torchvision"]
