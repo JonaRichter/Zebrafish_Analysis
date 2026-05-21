@@ -68,9 +68,9 @@ def make_full_overlay(result: dict) -> np.ndarray:
         scale_y = h_base / mask_h
         scale_x = w_base / mask_w
         scaled = path_pts.astype(float).copy()
-        scaled[:, 0] = scaled[:, 0] * scale_x
-        scaled[:, 1] = scaled[:, 1] * scale_y
-        _draw_polyline(base, scaled[:, ::-1], _PATH_COLOR, thickness=2)  # (row,col) -> (x,y)
+        scaled[:, 0] = scaled[:, 0] * scale_y  # row  → y-axis
+        scaled[:, 1] = scaled[:, 1] * scale_x  # col  → x-axis
+        _draw_polyline(base, scaled[:, ::-1], _PATH_COLOR, thickness=2)  # (row,col) → (x,y)
 
     sl_pts = result.get("straight_line_points")
     if sl_pts is not None:
