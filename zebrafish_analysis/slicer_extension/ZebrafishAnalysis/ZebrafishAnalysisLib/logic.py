@@ -14,13 +14,6 @@ import tempfile
 import numpy as np  # must precede torch imports to enable the numpy bridge
 import cv2
 
-from zebrafish_analysis.core.seg import segmentation_pipeline
-from zebrafish_analysis.core.length import (
-    load_model,
-    tube_length_border2border,
-    classification_curvature,
-    compute_eye_metrics,
-)
 from zebrafish_analysis.core.scalebar import detect_scalebar as _detect_scalebar
 
 _MODEL_CACHE: dict = {}
@@ -100,6 +93,14 @@ def analyse_images(image_paths: list, params: dict,
         schema. On per-image errors the numeric fields are None and
         ``error`` holds the exception message.
     """
+    from zebrafish_analysis.core.seg import segmentation_pipeline
+    from zebrafish_analysis.core.length import (
+        load_model,
+        tube_length_border2border,
+        classification_curvature,
+        compute_eye_metrics,
+    )
+
     um_per_px = float(params.get("um_per_px", 22.99))
     include_eyes = params.get("eyes", False)
     body_filename = params.get("body_model_filename",

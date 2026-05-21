@@ -31,10 +31,10 @@ def test_analyse_images_returns_one_result_per_image(tmp_path, synthetic_fish_im
     dummy_mask = np.zeros((256, 256), dtype=np.uint8)
     dummy_grown = dummy_mask.copy()
 
-    with patch("zebrafish_analysis.slicer_extension.ZebrafishAnalysis.ZebrafishAnalysisLib.logic.segmentation_pipeline") as mock_pipeline, \
-         patch("zebrafish_analysis.slicer_extension.ZebrafishAnalysis.ZebrafishAnalysisLib.logic.load_model") as mock_load, \
-         patch("zebrafish_analysis.slicer_extension.ZebrafishAnalysis.ZebrafishAnalysisLib.logic.tube_length_border2border") as mock_length, \
-         patch("zebrafish_analysis.slicer_extension.ZebrafishAnalysis.ZebrafishAnalysisLib.logic.classification_curvature") as mock_curv:
+    with patch("zebrafish_analysis.core.seg.segmentation_pipeline") as mock_pipeline, \
+         patch("zebrafish_analysis.core.length.load_model") as mock_load, \
+         patch("zebrafish_analysis.core.length.tube_length_border2border") as mock_length, \
+         patch("zebrafish_analysis.core.length.classification_curvature") as mock_curv:
 
         mock_pipeline.return_value = (
             [synthetic_fish_image[:, :, ::-1]],
@@ -67,9 +67,9 @@ def test_analyse_images_error_per_image_does_not_crash(tmp_path, synthetic_fish_
 
     dummy_mask = np.zeros((256, 256), dtype=np.uint8)
 
-    with patch("zebrafish_analysis.slicer_extension.ZebrafishAnalysis.ZebrafishAnalysisLib.logic.segmentation_pipeline") as mock_pipeline, \
-         patch("zebrafish_analysis.slicer_extension.ZebrafishAnalysis.ZebrafishAnalysisLib.logic.load_model"), \
-         patch("zebrafish_analysis.slicer_extension.ZebrafishAnalysis.ZebrafishAnalysisLib.logic.tube_length_border2border") as mock_length:
+    with patch("zebrafish_analysis.core.seg.segmentation_pipeline") as mock_pipeline, \
+         patch("zebrafish_analysis.core.length.load_model"), \
+         patch("zebrafish_analysis.core.length.tube_length_border2border") as mock_length:
 
         mock_pipeline.return_value = (
             [synthetic_fish_image[:, :, ::-1]],
