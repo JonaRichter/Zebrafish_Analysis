@@ -40,6 +40,19 @@ def _build_rgb_array(result: dict) -> np.ndarray:
     return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
 
+class _ClickableLabel(qt.QLabel):
+    """QLabel that forwards left-click coords to a handler when click mode is active."""
+
+    def __init__(self, click_handler=None, parent=None):
+        super().__init__(parent)
+        self._click_handler = click_handler
+
+    def mousePressEvent(self, event):
+        if self._click_handler and event.button() == qt.Qt.LeftButton:
+            self._click_handler(event.x(), event.y())
+        super().mousePressEvent(event)
+
+
 class DetailTab(qt.QWidget):
     def __init__(self, on_navigate=None):
         super().__init__()
@@ -52,12 +65,17 @@ class DetailTab(qt.QWidget):
         self._pending = {}        # index → rgb ndarray  (written by workers, read by poll)
         self.setFocusPolicy(qt.Qt.StrongFocus)
 
+        self._manual_mode = False
+        self._manual_points = []   # list of (row, col) in original image space
+        self._params_getter = None  # set by widget after construction
+
         self._poll_timer = qt.QTimer()
         self._poll_timer.setInterval(40)
         self._poll_timer.timeout.connect(self._poll_pending)
         self._poll_timer.start()
 
-        self._image_label = qt.QLabel("Select an image from the Gallery.")
+        self._image_label = _ClickableLabel(self._on_image_click)
+        self._image_label.setText("Select an image from the Gallery.")
         self._image_label.setAlignment(qt.Qt.AlignCenter)
         self._image_label.setStyleSheet("background: #1a1a1a; color: #666;")
         self._image_label.setMinimumHeight(300)
@@ -68,6 +86,17 @@ class DetailTab(qt.QWidget):
         self._metrics_label = qt.QLabel("")
         self._metrics_label.setWordWrap(True)
         self._metrics_label.setStyleSheet("font-size: 12px; padding: 4px;")
+
+        self._btn_manual_adjust = qt.QPushButton("✏ Manual Adjust")
+        self._btn_revert_auto = qt.QPushButton("↩ Revert to Auto")
+        self._btn_revert_auto.setVisible(False)
+        self._manual_status = qt.QLabel("")
+        self._manual_status.setAlignment(qt.Qt.AlignCenter)
+        self._manual_status.setStyleSheet("font-size: 11px; color: #aaa; padding: 2px;")
+        self._manual_status.setVisible(False)
+
+        self._btn_manual_adjust.clicked.connect(self._on_manual_adjust_clicked)
+        self._btn_revert_auto.clicked.connect(self._on_revert_auto_clicked)
 
         self._btn_prev = qt.QPushButton("◄")
         self._btn_next = qt.QPushButton("►")
@@ -89,8 +118,16 @@ class DetailTab(qt.QWidget):
         _nav_row.addWidget(self._btn_next)
         _nav_row.addStretch(1)
 
+        _manual_row = qt.QHBoxLayout()
+        _manual_row.addStretch(1)
+        _manual_row.addWidget(self._btn_manual_adjust)
+        _manual_row.addWidget(self._btn_revert_auto)
+        _manual_row.addStretch(1)
+
         layout = qt.QVBoxLayout(self)
         layout.addWidget(self._image_label, 1)
+        layout.addLayout(_manual_row, 0)
+        layout.addWidget(self._manual_status, 0)
         layout.addLayout(_nav_row, 0)
         layout.addWidget(self._metrics_label, 0)
 
@@ -102,11 +139,26 @@ class DetailTab(qt.QWidget):
     # ------------------------------------------------------------------
 
     def show_result(self, index: int, results: list) -> None:
+        # Exit click mode when navigating to a new image
+        if self._manual_mode:
+            self._manual_mode = False
+            self._manual_points = []
+            self._manual_status.setVisible(False)
+
         self._results = results
         self._current_idx = index
         result = results[index]
 
         self._metrics_label.setText(_format_metrics(result))
+
+        # Sync button state
+        is_corrected = bool(result.get("manual_corrected"))
+        self._btn_revert_auto.setVisible(is_corrected)
+        self._btn_manual_adjust.setText(
+            "✏ Redo Manual" if is_corrected else "✏ Manual Adjust"
+        )
+        self._manual_status.setText("")
+        self._manual_status.setVisible(False)
 
         if index in self._cache:
             self._full_pixmap = self._cache[index]
@@ -213,6 +265,148 @@ class DetailTab(qt.QWidget):
 
     def resizeEvent(self, event):
         self._update_display()
+
+    # ------------------------------------------------------------------
+    # Manual correction — click mode
+    # ------------------------------------------------------------------
+
+    def _on_manual_adjust_clicked(self):
+        """Enter click mode to place head/tail points."""
+        if not self._results:
+            return
+        self._manual_mode = True
+        self._manual_points = []
+        self._manual_status.setText("Click HEAD point (1/2)")
+        self._manual_status.setVisible(True)
+        # Restore clean overlay (no stale dots)
+        self._update_display()
+
+    def _on_revert_auto_clicked(self):
+        """Restore auto-computed values for current fish."""
+        if not self._results:
+            return
+        result = self._results[self._current_idx]
+        import logic
+        logic.revert_manual_correction(result)
+
+        self._cache.pop(self._current_idx, None)
+        self._jobs.discard(self._current_idx)
+
+        self._manual_mode = False
+        self._manual_points = []
+        self._manual_status.setText("Reverted to auto.")
+        self._manual_status.setVisible(True)
+        self._btn_revert_auto.setVisible(False)
+        self._btn_manual_adjust.setText("✏ Manual Adjust")
+        self._metrics_label.setText(_format_metrics(result))
+
+        self._start_job(self._current_idx)
+
+    def _on_image_click(self, click_x, click_y):
+        """Handle a left-click on the image label during manual mode."""
+        if not self._manual_mode:
+            return
+        coords = self._label_to_orig_coords(click_x, click_y)
+        if coords is None:
+            return
+
+        self._manual_points.append(coords)
+        self._redraw_with_dots()
+
+        if len(self._manual_points) == 1:
+            self._manual_status.setText("Click TAIL point (2/2)")
+        elif len(self._manual_points) >= 2:
+            self._manual_mode = False
+            self._manual_status.setText("Computing…")
+            self._apply_correction()
+
+    def _label_to_orig_coords(self, click_x, click_y):
+        """Map label pixel (x, y) → original image (row, col).  Returns None on failure."""
+        if self._full_pixmap is None or self._full_pixmap.isNull():
+            return None
+        if not self._results or self._current_idx >= len(self._results):
+            return None
+
+        orig = self._results[self._current_idx].get("original")
+        if orig is None:
+            return None
+
+        orig_h, orig_w = orig.shape[:2]
+        label_w = self._image_label.width
+        label_h = self._image_label.height
+        pix_w = self._full_pixmap.width()
+        pix_h = self._full_pixmap.height()
+
+        if pix_w == 0 or pix_h == 0 or label_w == 0 or label_h == 0:
+            return None
+
+        scale = min(label_w / pix_w, label_h / pix_h)
+        offset_x = (label_w - pix_w * scale) / 2
+        offset_y = (label_h - pix_h * scale) / 2
+
+        img_col = (click_x - offset_x) / scale
+        img_row = (click_y - offset_y) / scale
+
+        col = int(np.clip(img_col, 0, orig_w - 1))
+        row = int(np.clip(img_row, 0, orig_h - 1))
+        return (row, col)
+
+    def _redraw_with_dots(self):
+        """Draw placed manual points on a copy of the current scaled pixmap."""
+        if self._full_pixmap is None or self._full_pixmap.isNull():
+            return
+
+        label_w = self._image_label.width
+        label_h = self._image_label.height
+        pix_w = self._full_pixmap.width()
+        pix_h = self._full_pixmap.height()
+
+        scaled = self._full_pixmap.scaled(
+            label_w, label_h, qt.Qt.KeepAspectRatio, qt.Qt.SmoothTransformation
+        )
+
+        if not self._manual_points:
+            self._image_label.setPixmap(scaled)
+            return
+
+        scale = min(label_w / pix_w, label_h / pix_h)
+        offset_x = (label_w - pix_w * scale) / 2
+        offset_y = (label_h - pix_h * scale) / 2
+
+        colors = [qt.QColor(0, 220, 0), qt.QColor(220, 0, 0)]  # green=head, red=tail
+        painter = qt.QPainter(scaled)
+        for i, (row, col) in enumerate(self._manual_points):
+            lx = int(col * scale + offset_x)
+            ly = int(row * scale + offset_y)
+            c = colors[i]
+            painter.setPen(qt.QPen(c, 3))
+            painter.setBrush(qt.QBrush(qt.QColor(c.red(), c.green(), c.blue(), 180)))
+            painter.drawEllipse(lx - 8, ly - 8, 16, 16)
+        painter.end()
+        self._image_label.setPixmap(scaled)
+
+    def _apply_correction(self):
+        """Apply 2-point manual correction to current result and refresh."""
+        if len(self._manual_points) < 2:
+            return
+        result = self._results[self._current_idx]
+        params = self._params_getter() if callable(self._params_getter) else {}
+
+        import logic
+        logic.apply_manual_correction(
+            result, self._manual_points[0], self._manual_points[1], params
+        )
+
+        self._cache.pop(self._current_idx, None)
+        self._jobs.discard(self._current_idx)
+        self._manual_points = []
+
+        self._manual_status.setText("Manual correction applied.")
+        self._btn_revert_auto.setVisible(True)
+        self._btn_manual_adjust.setText("✏ Redo Manual")
+        self._metrics_label.setText(_format_metrics(result))
+
+        self._start_job(self._current_idx)
 
 
 def _format_metrics(r: dict) -> str:
