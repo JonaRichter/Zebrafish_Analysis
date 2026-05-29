@@ -250,3 +250,118 @@ def analyse_images(image_paths: list, params: dict,
         progress_callback(n, n)
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# Manual correction
+# ---------------------------------------------------------------------------
+
+def apply_manual_correction(result, point1_orig, point2_orig, params=None):
+    """
+    Recompute length, ratio, and curvature from manually placed head/tail points.
+
+    Parameters
+    ----------
+    result : dict
+        Result dict (mutated in-place).  Must contain 'mask', 'original', 'spacing'.
+    point1_orig, point2_orig : tuple
+        (row, col) in original image coordinate space (as clicked on the display).
+    params : dict | None
+        Optional keys: 'hitl' (bool), 'threshold' (float).
+        Used for curvature re-classification.  Defaults to hitl=False, threshold=0.85.
+
+    Returns
+    -------
+    result : dict
+        The same dict, updated in-place.
+    """
+    from zebrafish_analysis.core.manual import compute_manual_length
+    from zebrafish_analysis.core.length import classification_curvature
+
+    if params is None:
+        params = {}
+
+    spacing = result.get("spacing")
+    if spacing is None:
+        print("apply_manual_correction: spacing is None — skipping (fish had an error?)")
+        return result
+
+    mask = result.get("mask")
+    original = result.get("original")
+    if mask is None or original is None:
+        print("apply_manual_correction: mask or original missing — skipping")
+        return result
+
+    # Snapshot auto values on first correction only
+    if "_auto_length" not in result:
+        result["_auto_length"] = result.get("length")
+        result["_auto_ratio"] = result.get("ratio")
+        result["_auto_path_points"] = result.get("path_points")
+        result["_auto_straight_line_points"] = result.get("straight_line_points")
+        result["_auto_curvature"] = result.get("curvature")
+
+    # Convert original-image coords → mask coords
+    orig_h, orig_w = original.shape[:2]
+    mask_h, mask_w = mask.shape[:2]
+    scale_y = mask_h / orig_h
+    scale_x = mask_w / orig_w
+
+    point1_mask = (
+        int(np.clip(point1_orig[0] * scale_y, 0, mask_h - 1)),
+        int(np.clip(point1_orig[1] * scale_x, 0, mask_w - 1)),
+    )
+    point2_mask = (
+        int(np.clip(point2_orig[0] * scale_y, 0, mask_h - 1)),
+        int(np.clip(point2_orig[1] * scale_x, 0, mask_w - 1)),
+    )
+
+    # Recompute length + path
+    length, straight_length, path_pts, sl_pts = compute_manual_length(
+        mask, point1_mask, point2_mask, spacing
+    )
+    result["length"] = float(length)
+    result["ratio"] = float(length / straight_length) if straight_length > 0 else None
+    result["path_points"] = path_pts
+    result["straight_line_points"] = sl_pts
+
+    # Recompute curvature if model is loaded
+    curv_model = _MODEL_CACHE.get("curvature")
+    if curv_model is not None:
+        try:
+            use_thr = params.get("hitl", False)
+            thr = float(params.get("threshold", 0.85))
+            _, cls = classification_curvature(
+                result["original"], result["grown"], curv_model, use_thr, thr
+            )
+            result["curvature"] = int(cls.item())
+        except Exception as exc:
+            print(f"apply_manual_correction: curvature recompute failed ({exc})")
+    else:
+        print("apply_manual_correction: curvature model not in cache — skipping")
+
+    result["manual_corrected"] = True
+    return result
+
+
+def revert_manual_correction(result):
+    """
+    Restore auto-computed values saved before the first manual correction.
+    No-op if result['manual_corrected'] is not set.
+
+    Returns
+    -------
+    result : dict
+        The same dict, updated in-place.
+    """
+    if not result.get("manual_corrected"):
+        return result
+
+    result["length"] = result.pop("_auto_length", result.get("length"))
+    result["ratio"] = result.pop("_auto_ratio", result.get("ratio"))
+    result["path_points"] = result.pop("_auto_path_points", result.get("path_points"))
+    result["straight_line_points"] = result.pop(
+        "_auto_straight_line_points", result.get("straight_line_points")
+    )
+    result["curvature"] = result.pop("_auto_curvature", result.get("curvature"))
+    result.pop("manual_corrected", None)
+    return result
