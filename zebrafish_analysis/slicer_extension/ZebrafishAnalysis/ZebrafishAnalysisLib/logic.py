@@ -275,9 +275,6 @@ def apply_manual_correction(result, point1_orig, point2_orig, params=None):
     result : dict
         The same dict, updated in-place.
     """
-    from zebrafish_analysis.core.manual import compute_manual_length
-    from zebrafish_analysis.core.length import classification_curvature
-
     if params is None:
         params = {}
 
@@ -291,6 +288,9 @@ def apply_manual_correction(result, point1_orig, point2_orig, params=None):
     if mask is None or original is None:
         print("apply_manual_correction: mask or original missing — skipping")
         return result
+
+    from zebrafish_analysis.core.manual import compute_manual_length
+    from zebrafish_analysis.core.length import classification_curvature
 
     # Snapshot auto values on first correction only
     if "_auto_length" not in result:
