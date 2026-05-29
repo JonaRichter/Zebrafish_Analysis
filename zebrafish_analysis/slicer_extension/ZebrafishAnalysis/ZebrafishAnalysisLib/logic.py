@@ -35,6 +35,7 @@ _RESULT_KEYS = (
     "ratio",
     "eye_area",
     "eye_diameter",
+    "spacing",
     "error",
 )
 
@@ -192,6 +193,7 @@ def analyse_images(image_paths: list, params: dict,
                 um_per_px * h_orig / mask_h,
                 um_per_px * w_orig / mask_w,
             )
+            r["spacing"] = spacing
 
             # ---- length + ratio ----
             if params.get("length", True) and mask_bin is not None:
