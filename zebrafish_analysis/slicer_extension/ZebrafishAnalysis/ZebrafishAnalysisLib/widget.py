@@ -72,7 +72,11 @@ class ZebrafishAnalysisMainWidget:
             central.hide()
         panelDock = mw.findChild(qt.QDockWidget, "PanelDockWidget")
         if panelDock:
+            panelDock.setMinimumHeight(300)
             mw.resizeDocks([panelDock], [mw.width], qt.Qt.Horizontal)
+        _pyDock = mw.findChild(qt.QDockWidget, "PythonConsoleDockWidget")
+        if _pyDock:
+            mw.resizeDocks([_pyDock], [150], qt.Qt.Vertical)
         dataProbe = mw.findChild(ctk.ctkCollapsibleButton, "DataProbeCollapsibleWidget")
         if dataProbe:
             dataProbe.collapsed = True
@@ -222,7 +226,10 @@ class ZebrafishAnalysisMainWidget:
         self._tabs.addTab(self._gallery, "Gallery")
 
         from detail_tab import DetailTab
-        self._detail = DetailTab(on_navigate=self._navigate_detail)
+        self._detail = DetailTab(
+            on_navigate=self._navigate_detail,
+        )
+        self._detail._params_getter = self._get_correction_params
         self._tabs.addTab(self._detail, "Detail")
 
         from results_tab import ResultsTab
@@ -365,6 +372,13 @@ class ZebrafishAnalysisMainWidget:
         self._results = analyse_images(self._image_paths, params, _progress_cb)
         self._progress.setVisible(False)
         self._on_results_ready()
+
+    def _get_correction_params(self):
+        """Return current hitl/threshold settings for manual correction curvature recompute."""
+        return {
+            "hitl": self._chk_hitl.isChecked(),
+            "threshold": float(self._threshold_slider.value),
+        }
 
     def _on_gallery_select(self, index: int):
         self._current_detail_idx = index
