@@ -229,7 +229,7 @@ class DetailTab(qt.QWidget):
             self._jobs.discard(idx)
             pixmap = _numpy_to_qpixmap(rgb)
             self._cache[idx] = pixmap
-            if idx == self._current_idx and self._full_pixmap is None:
+            if idx == self._current_idx:
                 self._full_pixmap = pixmap
                 self._image_label.setText("")
                 self._update_display()
@@ -369,15 +369,18 @@ class DetailTab(qt.QWidget):
             self._image_label.setPixmap(scaled)
             return
 
+        # scale maps original-image coords → pixmap coords (no letterbox offsets:
+        # the label centers the scaled pixmap automatically, so dots must be in
+        # pixmap space, not label space)
         scale = min(label_w / pix_w, label_h / pix_h)
-        offset_x = (label_w - pix_w * scale) / 2
-        offset_y = (label_h - pix_h * scale) / 2
+        pix_draw_w = pix_w * scale
+        pix_draw_h = pix_h * scale
 
         colors = [qt.QColor(0, 220, 0), qt.QColor(220, 0, 0)]  # green=head, red=tail
         painter = qt.QPainter(scaled)
         for i, (row, col) in enumerate(self._manual_points):
-            lx = int(col * scale + offset_x)
-            ly = int(row * scale + offset_y)
+            lx = int(np.clip(col * scale, 8, pix_draw_w - 9))
+            ly = int(np.clip(row * scale, 8, pix_draw_h - 9))
             c = colors[i]
             painter.setPen(qt.QPen(c, 3))
             painter.setBrush(qt.QBrush(qt.QColor(c.red(), c.green(), c.blue(), 180)))
@@ -400,6 +403,7 @@ class DetailTab(qt.QWidget):
         self._cache.pop(self._current_idx, None)
         self._jobs.discard(self._current_idx)
         self._manual_points = []
+        self._full_pixmap = None  # force _poll_pending to update display on rebuild
 
         self._manual_status.setText("Manual correction applied.")
         self._btn_revert_auto.setVisible(True)
