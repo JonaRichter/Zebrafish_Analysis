@@ -94,9 +94,7 @@ class ZebrafishAnalysisMainWidget:
         self._build_right_panel(splitter)
         splitter.setStretchFactor(1, 1)
 
-        self._progress = qt.QProgressBar()
-        self._progress.setVisible(False)
-        layout.addWidget(self._progress)
+        # progress bar removed — run button serves as progress indicator
 
     def _build_left_panel(self, splitter):
         scroll = qt.QScrollArea()
@@ -377,22 +375,46 @@ class ZebrafishAnalysisMainWidget:
         }
 
         n = len(self._image_paths)
-        self._progress.setRange(0, n)
-        self._progress.setValue(0)
-        self._progress.setVisible(True)
         self._btn_run.setEnabled(False)
-        self._btn_run.setText("⏳  Running…")
+        self._btn_run.setText("Loading models…")
+        self._btn_run.setStyleSheet("font-weight: bold; padding: 6px; color: #888;")
 
         _result_box = [None]
         _q = _queue.Queue()
 
         def _worker():
+            # PyTorch's OpenMP parallel regions conflict with Python threads on macOS.
+            # Single-threaded inference avoids the deadlock.
+            try:
+                import torch
+                torch.set_num_threads(1)
+            except Exception:
+                pass
             def _cb(i, total):
-                _q.put(i)          # progress — main thread reads via timer
+                _q.put(i)
             _result_box[0] = analyse_images(self._image_paths, params, _cb)
             _q.put(None)           # sentinel: done
 
         threading.Thread(target=_worker, daemon=True).start()
+
+        def _set_btn_progress(i):
+            pct = i / n if n > 0 else 0
+            s = f"{pct:.4f}"
+            if pct <= 0:
+                style = "background: #404040; color: #aaa;"
+            elif pct >= 1:
+                style = "background: #2d6e2d; color: white;"
+            else:
+                style = (
+                    f"background: qlineargradient("
+                    f"x1:0, y1:0, x2:1, y2:0, "
+                    f"stop:0 #2d6e2d, stop:{s} #2d6e2d, "
+                    f"stop:{s} #404040, stop:1 #404040); color: white;"
+                )
+            self._btn_run.setStyleSheet(
+                f"QPushButton {{ {style} font-weight: bold; padding: 6px; border: none; border-radius: 3px; }}"
+            )
+            self._btn_run.setText(f"Image {i} / {n}")
 
         def _poll():
             try:
@@ -400,13 +422,13 @@ class ZebrafishAnalysisMainWidget:
                     item = _q.get_nowait()
                     if item is None:              # finished
                         self._run_poll_timer.stop()
-                        self._progress.setVisible(False)
                         self._btn_run.setEnabled(True)
+                        self._btn_run.setStyleSheet("font-weight: bold; padding: 6px;")
                         self._btn_run.setText("▶  Run Analysis")
                         self._results = _result_box[0]
                         self._on_results_ready()
                         return
-                    self._progress.setValue(item)
+                    _set_btn_progress(item)
             except _queue.Empty:
                 pass
 
