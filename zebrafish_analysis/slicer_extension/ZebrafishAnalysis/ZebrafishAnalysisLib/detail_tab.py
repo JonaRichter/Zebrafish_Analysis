@@ -68,7 +68,8 @@ class DetailTab(qt.QWidget):
         self._manual_mode = False
         self._manual_points = []   # list of (row, col) in original image space
         self._params_getter = None  # set by widget after construction
-        self._swipe_accum = 0      # accumulated horizontal wheel delta for swipe navigation
+        self._swipe_accum = 0         # accumulated horizontal wheel delta for swipe navigation
+        self._swipe_triggered = False  # fire at most once per gesture
 
         self._poll_timer = qt.QTimer()
         self._poll_timer.setInterval(40)
@@ -265,20 +266,34 @@ class DetailTab(qt.QWidget):
         super().keyPressEvent(event)
 
     def wheelEvent(self, event):
-        """Two-finger horizontal trackpad swipe → navigate images."""
+        """Two-finger horizontal trackpad swipe → navigate one image per gesture."""
+        # Ignore momentum phase (post-lift inertia that causes multi-image scroll)
+        _MOMENTUM = getattr(qt.Qt, "ScrollMomentum", 4)
+        if event.phase() == _MOMENTUM:
+            event.accept()
+            return
+
         dx = event.angleDelta().x()
         dy = event.angleDelta().y()
+
         if abs(dx) > abs(dy) and self._on_navigate:
-            self._swipe_accum += dx
-            # 60 units ≈ half a scroll notch — responsive but not hair-trigger
-            if self._swipe_accum > 60:
+            # New gesture starting — reset state
+            _BEGIN = getattr(qt.Qt, "ScrollBegin", 1)
+            if event.phase() == _BEGIN:
                 self._swipe_accum = 0
-                self._on_navigate(-1)  # swipe left (fingers left) → previous
-            elif self._swipe_accum < -60:
-                self._swipe_accum = 0
-                self._on_navigate(1)   # swipe right (fingers right) → next
+                self._swipe_triggered = False
+
+            if not self._swipe_triggered:
+                self._swipe_accum += dx
+                if self._swipe_accum > 60:
+                    self._swipe_triggered = True
+                    self._on_navigate(-1)  # fingers left → previous
+                elif self._swipe_accum < -60:
+                    self._swipe_triggered = True
+                    self._on_navigate(1)   # fingers right → next
         else:
             self._swipe_accum = 0
+            self._swipe_triggered = False
             super().wheelEvent(event)
 
     def resizeEvent(self, event):
