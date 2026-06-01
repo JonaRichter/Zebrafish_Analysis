@@ -39,6 +39,8 @@ class ExcludeTab(qt.QWidget):
             self._table.setCellWidget(row, 1, chk)
             self._checkboxes.append((filename, chk))
 
+        self._notify()  # propagate initial checked state (error rows pre-checked)
+
     def _notify(self):
         excluded = {fn for fn, chk in self._checkboxes if chk.isChecked()}
         self._on_change(excluded)

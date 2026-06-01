@@ -186,7 +186,7 @@ def analyse_images(image_paths: list, params: dict,
             mask_bin = (masks[i] > 0) if masks[i] is not None else None
             eye_bin = (eyes[i] > 0) if eyes[i] is not None else None
 
-            # spacing: mask is 256×256, original may be larger
+            # um_per_px is µm per original-image pixel; scale to mask space.
             h_orig, w_orig = orig_bgr.shape[:2]
             mask_h, mask_w = masks[i].shape[:2] if masks[i] is not None else (256, 256)
             spacing = (

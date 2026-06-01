@@ -138,7 +138,7 @@ class ZebrafishAnalysisMainWidget:
         self._chk_curvature = qt.QCheckBox("Curvature class");    self._chk_curvature.setChecked(True)
         self._chk_ratio     = qt.QCheckBox("Length/straight ratio"); self._chk_ratio.setChecked(True)
         self._chk_eyes      = qt.QCheckBox("Eye segmentation");   self._chk_eyes.setChecked(False)
-        self._chk_hitl      = qt.QCheckBox("Confidence threshold"); self._chk_hitl.setChecked(True)
+        self._chk_hitl      = qt.QCheckBox("Confidence threshold"); self._chk_hitl.setChecked(False)
 
         for chk in (self._chk_length, self._chk_curvature, self._chk_ratio,
                     self._chk_eyes, self._chk_hitl):
@@ -409,17 +409,31 @@ class ZebrafishAnalysisMainWidget:
     def _on_export_excel(self):
         from export import export_excel
         if not self._results:
+            slicer.util.warningDisplay("No results to export. Run analysis first.")
             return
-        path, _ = qt.QFileDialog.getSaveFileName(None, "Save Excel", "", "Excel (*.xlsx)")
+        path = qt.QFileDialog.getSaveFileName(None, "Save Excel", "", "Excel (*.xlsx)")
         if path:
+            if not path.endswith(".xlsx"):
+                path += ".xlsx"
             active = [r for r in self._results if r["filename"] not in self._excluded]
-            export_excel(active, path)
+            try:
+                export_excel(active, path)
+                slicer.util.infoDisplay(f"Saved {len(active)} rows to:\n{path}")
+            except Exception as e:
+                slicer.util.errorDisplay(f"Export failed:\n{e}")
 
     def _on_export_csv(self):
         from export import export_csv
         if not self._results:
+            slicer.util.warningDisplay("No results to export. Run analysis first.")
             return
-        path, _ = qt.QFileDialog.getSaveFileName(None, "Save CSV", "", "CSV (*.csv)")
+        path = qt.QFileDialog.getSaveFileName(None, "Save CSV", "", "CSV (*.csv)")
         if path:
+            if not path.endswith(".csv"):
+                path += ".csv"
             active = [r for r in self._results if r["filename"] not in self._excluded]
-            export_csv(active, path)
+            try:
+                export_csv(active, path)
+                slicer.util.infoDisplay(f"Saved {len(active)} rows to:\n{path}")
+            except Exception as e:
+                slicer.util.errorDisplay(f"Export failed:\n{e}")
