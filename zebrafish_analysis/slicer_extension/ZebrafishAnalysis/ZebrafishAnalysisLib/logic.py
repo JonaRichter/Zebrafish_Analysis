@@ -170,77 +170,59 @@ def analyse_images(image_paths: list, params: dict,
     else:
         curv_model = None
 
-    # ---- segmentation (all images at once) ----
-    # segmentation_pipeline takes a folder_path; symlink selected files into a temp dir
-    _IMG_EXTS = ('.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif')
-    with tempfile.TemporaryDirectory() as _tmp:
-        name_to_path: dict = {}
-        for p in image_paths:
-            name = os.path.basename(p)
-            if name in name_to_path:
-                raise ValueError(f"Duplicate filename '{name}' in image list.")
-            name_to_path[name] = p
-            os.symlink(p, os.path.join(_tmp, name))
-
-        _seg_kwargs = dict(
-            include_eyes=include_eyes,
-            body_model_filename=body_filename,
-            body_encoder_name=body_encoder,
-            body_force_download=force_download,
-        )
-        if include_eyes and eye_filename:
-            _seg_kwargs["eye_model_filename"] = eye_filename
-        seg_result = segmentation_pipeline(_tmp, **_seg_kwargs)
-
-        # capture order before temp dir is cleaned up (mirrors load_images_from_path)
-        _ordered_names = [
-            f for f in os.listdir(_tmp)
-            if f.lower().endswith(_IMG_EXTS)
-        ]
-
-    name_to_seg_idx = {name: idx for idx, name in enumerate(_ordered_names)}
-
-    if include_eyes and len(seg_result) == 4:
-        originals_bgr, masks, growns, eyes = seg_result
-    else:
-        originals_bgr, masks, growns = seg_result[:3]
-        eyes = [None] * len(image_paths)
+    # ---- per-image segmentation + measurement ----
+    # Call segmentation_pipeline once per image so progress_callback fires
+    # after each one, keeping the UI responsive. The cached _load_unet_model
+    # means model weights are only read from disk once across all calls.
+    _seg_kwargs = dict(
+        include_eyes=include_eyes,
+        body_model_filename=body_filename,
+        body_encoder_name=body_encoder,
+        body_force_download=force_download,
+    )
+    if include_eyes and eye_filename:
+        _seg_kwargs["eye_model_filename"] = eye_filename
 
     n = len(image_paths)
     results = []
 
     for _loop_i, image_path in enumerate(sorted(image_paths)):
-        if progress_callback:
-            progress_callback(_loop_i, n)
-
         r = _empty_result(image_path)
 
         try:
-            _name = os.path.basename(image_path)
-            i = name_to_seg_idx.get(_name)
-            if i is None:
-                r["error"] = f"Segmentation result not found for {_name}."
-                results.append(r)
-                continue
+            # Segment this single image — model already cached, no disk reload
+            with tempfile.TemporaryDirectory() as _tmp:
+                os.symlink(image_path, os.path.join(_tmp, os.path.basename(image_path)))
+                seg_result = segmentation_pipeline(_tmp, **_seg_kwargs)
 
-            orig_bgr = originals_bgr[i]
+            if include_eyes and len(seg_result) == 4:
+                originals_bgr, masks, growns, eyes_list = seg_result
+            else:
+                originals_bgr, masks, growns = seg_result[:3]
+                eyes_list = [None]
+
+            orig_bgr = originals_bgr[0] if originals_bgr else None
+            mask    = masks[0]      if masks      else None
+            grown   = growns[0]     if growns     else None
+            eye     = eyes_list[0]  if eyes_list  else None
+
             if orig_bgr is None:
                 r["error"] = "Could not read image."
                 results.append(r)
+                if progress_callback:
+                    progress_callback(_loop_i + 1, n)
                 continue
 
-            # seg.py returns BGR — convert to RGB for storage
-            r["original"] = cv2.cvtColor(orig_bgr, cv2.COLOR_BGR2RGB)
-            r["mask"] = masks[i]
-            r["grown"] = growns[i]
-            r["eye_mask"] = eyes[i]
+            r["original"]  = cv2.cvtColor(orig_bgr, cv2.COLOR_BGR2RGB)
+            r["mask"]      = mask
+            r["grown"]     = grown
+            r["eye_mask"]  = eye
 
-            mask_bin = (masks[i] > 0) if masks[i] is not None else None
-            eye_bin = (eyes[i] > 0) if eyes[i] is not None else None
+            mask_bin = (mask > 0) if mask is not None else None
+            eye_bin  = (eye  > 0) if eye  is not None else None
 
-            # um_per_px is µm per original-image pixel; scale to mask space.
             h_orig, w_orig = orig_bgr.shape[:2]
-            mask_h, mask_w = masks[i].shape[:2] if masks[i] is not None else (256, 256)
+            mask_h, mask_w = mask.shape[:2] if mask is not None else (256, 256)
             spacing = (
                 um_per_px * h_orig / mask_h,
                 um_per_px * w_orig / mask_w,
@@ -276,7 +258,6 @@ def analyse_images(image_paths: list, params: dict,
                     )
                     r["curvature"] = int(cls.item())
                 except Exception as exc:
-                    # do not overwrite an existing error from length
                     if r["error"] is None:
                         r["error"] = f"Curvature error: {exc}"
 
@@ -286,7 +267,7 @@ def analyse_images(image_paths: list, params: dict,
                     info = compute_eye_metrics(
                         eye_bin, mask_fish=mask_bin, spacing=spacing
                     )
-                    r["eye_area"] = float(info.get("eye_area", 0))
+                    r["eye_area"]     = float(info.get("eye_area",     0))
                     r["eye_diameter"] = float(info.get("eye_diameter", 0))
                 except Exception as exc:
                     if r["error"] is None:
@@ -297,9 +278,8 @@ def analyse_images(image_paths: list, params: dict,
             r["error"] = f"Unhandled error: {exc}\n{traceback.format_exc()}"
 
         results.append(r)
-
-    if progress_callback:
-        progress_callback(n, n)
+        if progress_callback:
+            progress_callback(_loop_i + 1, n)
 
     return results
 
