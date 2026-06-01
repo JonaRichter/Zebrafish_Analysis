@@ -203,6 +203,8 @@ class ZebrafishAnalysisMainWidget:
         direct.addRow("µm per pixel:", self._um_per_px)
         sc_layout.addLayout(direct)
 
+        vbox.addStretch(1)  # push run + export to bottom
+
         self._btn_run = qt.QPushButton("▶  Run Analysis")
         self._btn_run.setStyleSheet("font-weight: bold; padding: 6px;")
         vbox.addWidget(self._btn_run)
