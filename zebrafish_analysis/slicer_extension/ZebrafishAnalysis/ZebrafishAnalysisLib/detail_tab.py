@@ -68,6 +68,7 @@ class DetailTab(qt.QWidget):
         self._manual_mode = False
         self._manual_points = []   # list of (row, col) in original image space
         self._params_getter = None  # set by widget after construction
+        self._swipe_accum = 0      # accumulated horizontal wheel delta for swipe navigation
 
         self._poll_timer = qt.QTimer()
         self._poll_timer.setInterval(40)
@@ -262,6 +263,23 @@ class DetailTab(qt.QWidget):
                 self._on_navigate(-1)
                 return
         super().keyPressEvent(event)
+
+    def wheelEvent(self, event):
+        """Two-finger horizontal trackpad swipe → navigate images."""
+        dx = event.angleDelta().x()
+        dy = event.angleDelta().y()
+        if abs(dx) > abs(dy) and self._on_navigate:
+            self._swipe_accum += dx
+            # 60 units ≈ half a scroll notch — responsive but not hair-trigger
+            if self._swipe_accum > 60:
+                self._swipe_accum = 0
+                self._on_navigate(-1)  # swipe left (fingers left) → previous
+            elif self._swipe_accum < -60:
+                self._swipe_accum = 0
+                self._on_navigate(1)   # swipe right (fingers right) → next
+        else:
+            self._swipe_accum = 0
+            super().wheelEvent(event)
 
     def resizeEvent(self, event):
         self._update_display()
