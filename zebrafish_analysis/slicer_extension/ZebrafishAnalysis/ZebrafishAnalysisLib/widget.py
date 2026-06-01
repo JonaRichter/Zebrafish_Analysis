@@ -263,6 +263,7 @@ class ZebrafishAnalysisMainWidget:
         self._btn_run.clicked.connect(self._on_run)
         self._btn_excel.clicked.connect(self._on_export_excel)
         self._btn_csv.clicked.connect(self._on_export_csv)
+        self._model_combo.currentIndexChanged.connect(self._start_preload)
 
     def _on_load_folder(self):
         folder = qt.QFileDialog.getExistingDirectory(None, "Select image folder")
@@ -311,6 +312,25 @@ class ZebrafishAnalysisMainWidget:
         if first_img_hw is not None:
             h_orig = first_img_hw[0]
             self._um_per_px.value = round(5885.0 / h_orig, 4)
+
+        self._start_preload()  # kick off model load in background while user reviews images
+
+    def _start_preload(self):
+        """Kick off background model preload so Run Analysis starts instantly."""
+        import threading
+        from logic import preload_models
+        model_data = self._model_combo.currentData
+        if not model_data:
+            return
+        body_file, body_enc, eye_file = model_data
+        params = {
+            "curvature":           True,  # always preload curvature
+            "eyes":                self._chk_eyes.isChecked(),
+            "body_model_filename": body_file,
+            "body_encoder_name":   body_enc,
+            "eye_model_filename":  eye_file,
+        }
+        threading.Thread(target=preload_models, args=(params,), daemon=True).start()
 
     def _on_detect_scale(self):
         from logic import detect_scalebar

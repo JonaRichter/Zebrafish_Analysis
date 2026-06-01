@@ -19,6 +19,58 @@ from zebrafish_analysis.core.scalebar import detect_scalebar as _detect_scalebar
 _MODEL_CACHE: dict = {}
 
 # ---------------------------------------------------------------------------
+# Segmentation model cache — monkey-patch seg._load_unet_model so models are
+# loaded once and reused. seg.py is sacred (not modified directly).
+# ---------------------------------------------------------------------------
+import zebrafish_analysis.core.seg as _seg_module
+
+_original_load_unet = _seg_module._load_unet_model
+
+
+def _cached_load_unet(model_path=None, repo_id=None, filename=None, label="model",
+                       revision="main", force_download=False, encoder_name="vgg16"):
+    """Caching wrapper: first call loads from disk, subsequent calls return cached model."""
+    cache_key = f"_unet_{filename}_{encoder_name}"
+    if force_download or cache_key not in _MODEL_CACHE:
+        _MODEL_CACHE[cache_key] = _original_load_unet(
+            model_path=model_path, repo_id=repo_id, filename=filename,
+            label=label, revision=revision, force_download=force_download,
+            encoder_name=encoder_name,
+        )
+    return _MODEL_CACHE[cache_key]
+
+
+_seg_module._load_unet_model = _cached_load_unet
+
+
+def preload_models(params: dict) -> None:
+    """Load and cache all models needed for the given params.
+
+    Safe to call from a background thread — only does file I/O and weight
+    deserialization, no parallel OMP inference.
+    """
+    from zebrafish_analysis.core.length import load_model
+
+    if params.get("curvature", True) and "curvature" not in _MODEL_CACHE:
+        _MODEL_CACHE["curvature"] = load_model()
+
+    body_filename = params.get("body_model_filename", "best_model_body_3400_vgg19.pth")
+    body_encoder  = params.get("body_encoder_name",   "vgg19")
+    _cached_load_unet(
+        repo_id="markdanielarndt/Zebrafish_Segmentation",
+        filename=body_filename, label="body model",
+        revision="main", force_download=False, encoder_name=body_encoder,
+    )
+
+    if params.get("eyes", False):
+        eye_filename = params.get("eye_model_filename", "best_model_eye_3400.pth")
+        _cached_load_unet(
+            repo_id="markdanielarndt/Zebrafish_Segmentation",
+            filename=eye_filename, label="eye model",
+            revision="main", force_download=False, encoder_name="vgg16",
+        )
+
+# ---------------------------------------------------------------------------
 # Result dict schema — every key must be present, missing values use None
 # ---------------------------------------------------------------------------
 _RESULT_KEYS = (
@@ -220,7 +272,7 @@ def analyse_images(image_paths: list, params: dict,
                     use_thr = params.get("hitl", False)
                     thr = float(params.get("threshold", 0.85))
                     _, cls = classification_curvature(
-                        r["original"], r["grown"], curv_model, use_thr, thr
+                        orig_bgr, r["grown"], curv_model, use_thr, thr
                     )
                     r["curvature"] = int(cls.item())
                 except Exception as exc:
