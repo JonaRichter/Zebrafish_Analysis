@@ -62,11 +62,12 @@ class _MinimapOverlay(qt.QLabel):
     #       the opposite corner (scalebar typically bottom-right).
     """
 
-    _W = 160
-    _H = 100
+    _MAX_SIDE = 160  # longer side of minimap in px
 
     def __init__(self, parent):
         super().__init__(parent)
+        self._W = self._MAX_SIDE
+        self._H = self._MAX_SIDE
         self.setFixedSize(self._W, self._H)
         self.setStyleSheet(
             "background: rgba(26,26,26,220); border: 1px solid #555; border-radius: 3px;"
@@ -80,17 +81,30 @@ class _MinimapOverlay(qt.QLabel):
         self.setAttribute(qt.Qt.WA_TransparentForMouseEvents, True)
 
     def set_thumbnail(self, full_pixmap: "qt.QPixmap") -> None:
-        """Pre-compute thumbnail once when a new image is loaded."""
+        """Pre-compute thumbnail once when a new image is loaded.
+
+        Resizes the minimap widget to match the image aspect ratio so there
+        is no letterboxing — the thumbnail fills the widget exactly.
+        """
         if full_pixmap.isNull():
             self._thumb = None
             return
+        pw = full_pixmap.width   # property in Slicer Qt
+        ph = full_pixmap.height
+        if pw >= ph:
+            self._W = self._MAX_SIDE
+            self._H = max(20, int(self._MAX_SIDE * ph / pw))
+        else:
+            self._H = self._MAX_SIDE
+            self._W = max(20, int(self._MAX_SIDE * pw / ph))
+        self.setFixedSize(self._W, self._H)
         self._thumb = full_pixmap.scaled(
             self._W, self._H,
             qt.Qt.KeepAspectRatio,
             qt.Qt.SmoothTransformation,
         )
-        self._thumb_w = self._thumb.width()
-        self._thumb_h = self._thumb.height()
+        self._thumb_w = self._thumb.width   # property in Slicer Qt
+        self._thumb_h = self._thumb.height
         self._thumb_x = (self._W - self._thumb_w) // 2
         self._thumb_y = (self._H - self._thumb_h) // 2
 
@@ -216,6 +230,7 @@ class ZoomableImageView(qt.QGraphicsView):
         self._orig_size = (int(rect.height()), int(rect.width()))
         self._placeholder.setVisible(False)
         self._minimap.set_thumbnail(pixmap)
+        self._reposition_minimap()   # size may have changed to match image aspect ratio
         if reset_zoom:
             self._reset_zoom()
             self.clear_dots()
