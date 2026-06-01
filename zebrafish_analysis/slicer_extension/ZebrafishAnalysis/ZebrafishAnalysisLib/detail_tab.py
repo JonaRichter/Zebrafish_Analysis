@@ -68,7 +68,7 @@ class DetailTab(qt.QWidget):
         self._manual_mode = False
         self._manual_points = []   # list of (row, col) in original image space
         self._params_getter = None  # set by widget after construction
-        self._swipe_last_time = 0.0    # monotonic time of last swipe navigation (cooldown)
+        self._swipe_locked = False  # True after nav fires; unlocks when momentum decays to ~0
 
         self._poll_timer = qt.QTimer()
         self._poll_timer.setInterval(40)
@@ -267,21 +267,24 @@ class DetailTab(qt.QWidget):
     def wheelEvent(self, event):
         """Two-finger horizontal trackpad swipe → navigate one image per gesture.
 
-        Uses a 500 ms cooldown instead of phase detection — Slicer's Qt bindings
-        don't reliably expose ScrollMomentum, so phase-based filtering fails.
+        Momentum-proof: lock after firing, unlock only when |dx| decays to ~0.
+        macOS momentum always decays to 0; a new deliberate swipe starts from 0.
+        No timers or phase detection needed.
         """
-        import time
         dx = event.angleDelta().x()
         dy = event.angleDelta().y()
 
         if abs(dx) > abs(dy) and self._on_navigate:
-            now = time.monotonic()
-            if now - self._swipe_last_time > 0.3:  # 300 ms cooldown blocks momentum
-                self._swipe_last_time = now
-                if dx > 0:
-                    self._on_navigate(-1)  # fingers left → previous
-                elif dx < 0:
-                    self._on_navigate(1)   # fingers right → next
+            if self._swipe_locked:
+                if abs(dx) < 8:          # momentum exhausted — ready for next swipe
+                    self._swipe_locked = False
+            else:
+                if abs(dx) > 20:         # deliberate swipe, not micro-jitter
+                    self._swipe_locked = True
+                    if dx > 0:
+                        self._on_navigate(-1)   # fingers left → previous
+                    else:
+                        self._on_navigate(1)    # fingers right → next
             event.accept()
         else:
             super().wheelEvent(event)
