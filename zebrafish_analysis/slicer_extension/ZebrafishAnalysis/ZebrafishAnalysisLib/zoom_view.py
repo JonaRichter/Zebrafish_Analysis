@@ -409,7 +409,7 @@ class ZoomableImageView(qt.QGraphicsView):
         if not self._minimap.isVisible():
             return
         visible = self.mapToScene(self.viewport().rect).boundingRect()
-        full = self._scene.sceneRect()
+        full = self._scene.sceneRect
         self._minimap.update_viewport(visible, full)
 
     def _reposition_minimap(self) -> None:
