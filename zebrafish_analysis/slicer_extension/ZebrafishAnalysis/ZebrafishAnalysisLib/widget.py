@@ -205,7 +205,22 @@ class ZebrafishAnalysisMainWidget:
 
         self._btn_run = qt.QPushButton("▶  Run Analysis")
         self._btn_run.setStyleSheet("font-weight: bold; padding: 6px;")
-        vbox.addWidget(self._btn_run)
+
+        self._run_progress = qt.QProgressBar()
+        self._run_progress.setTextVisible(True)
+        self._run_progress.setStyleSheet("""
+            QProgressBar {
+                font-weight: bold; border-radius: 3px; border: none;
+                background: #3a3a3a; color: white; text-align: center;
+                min-height: 28px;
+            }
+            QProgressBar::chunk { background: #2e7d32; border-radius: 2px; }
+        """)
+
+        self._run_stack = qt.QStackedWidget()
+        self._run_stack.addWidget(self._btn_run)       # index 0 — idle
+        self._run_stack.addWidget(self._run_progress)  # index 1 — running
+        vbox.addWidget(self._run_stack)
 
         export_box = ctk.ctkCollapsibleButton()
         export_box.text = "Export"
@@ -373,51 +388,31 @@ class ZebrafishAnalysisMainWidget:
         }
 
         n = len(self._image_paths)
-        self._btn_run.setEnabled(False)
-        self._btn_run.setText("Loading models…")
-        self._btn_run.setStyleSheet("font-weight: bold; padding: 6px; color: #888;")
-        slicer.app.processEvents()  # paint "Loading models…" before blocking
-
         import time as _time
+
+        self._run_progress.setRange(0, n)
+        self._run_progress.setValue(0)
+        self._run_progress.setFormat("Loading models…")
+        self._run_stack.setCurrentIndex(1)
+        slicer.app.processEvents()
+
         _t0 = _time.time()
 
         def _set_btn_progress(i, total):
-            pct = i / total if total > 0 else 0
-            # Hard-edge fill: two stops at same position = no smooth gradient
-            s = f"{pct:.4f}"
-            if pct <= 0:
-                fill = "#404040"
-                style = f"background: {fill}; color: #888;"
-            elif pct >= 1:
-                style = "background: #2e7d32; color: white;"
-            else:
-                style = (
-                    f"background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
-                    f"stop:0 #2e7d32, stop:{s} #2e7d32, "
-                    f"stop:{s} #404040, stop:1 #404040); color: white;"
-                )
-            # ETA
+            self._run_progress.setValue(i)
             elapsed = _time.time() - _t0
             if i > 0 and total > i:
                 remaining = elapsed / i * (total - i)
-                if remaining >= 60:
-                    eta = f"~{int(remaining // 60)}m {int(remaining % 60):02d}s left"
-                else:
-                    eta = f"~{int(remaining)}s left"
-                label = f"Image {i} / {total}  ·  {eta}"
+                eta = (f"~{int(remaining // 60)}m {int(remaining % 60):02d}s left"
+                       if remaining >= 60 else f"~{int(remaining)}s left")
+                self._run_progress.setFormat(f"Image {i} / {total}  ·  {eta}")
             else:
-                label = f"Image {i} / {total}"
-            self._btn_run.setStyleSheet(
-                f"QPushButton {{ {style} font-weight: bold; padding: 6px; border: none; border-radius: 3px; }}"
-            )
-            self._btn_run.setText(label)
-            slicer.app.processEvents()  # keep UI alive between images
+                self._run_progress.setFormat(f"Image {i} / {total}")
+            slicer.app.processEvents()
 
         self._results = analyse_images(self._image_paths, params, _set_btn_progress)
 
-        self._btn_run.setEnabled(True)
-        self._btn_run.setStyleSheet("font-weight: bold; padding: 6px;")
-        self._btn_run.setText("▶  Run Analysis")
+        self._run_stack.setCurrentIndex(0)
         self._on_results_ready()
 
     def _get_correction_params(self):
