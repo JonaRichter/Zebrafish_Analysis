@@ -118,8 +118,10 @@ class ZebrafishAnalysisMainWidget:
 
         self._btn_folder = qt.QPushButton("Load Folder…")
         self._btn_files  = qt.QPushButton("Load Images…")
-        in_layout.addWidget(self._btn_folder)
-        in_layout.addWidget(self._btn_files)
+        _load_row = qt.QHBoxLayout()
+        _load_row.addWidget(self._btn_folder)
+        _load_row.addWidget(self._btn_files)
+        in_layout.addLayout(_load_row)
         in_layout.addWidget(qt.QLabel("Queue:"))
         self._queue_list = qt.QListWidget()
         self._queue_list.setMaximumHeight(120)
