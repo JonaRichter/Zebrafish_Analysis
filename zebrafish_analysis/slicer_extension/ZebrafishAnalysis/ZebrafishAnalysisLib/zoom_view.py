@@ -204,7 +204,12 @@ class ZoomableImageView(qt.QGraphicsView):
     # ------------------------------------------------------------------
 
     def set_pixmap(self, pixmap: "qt.QPixmap", reset_zoom: bool = True) -> None:
-        """Load a new image. reset_zoom=True on navigation, False on overlay rebuild."""
+        """Load a new image. reset_zoom=True on navigation, False on overlay rebuild.
+
+        Only pass reset_zoom=False when the image pixel dimensions are identical
+        to the currently loaded image (e.g. rebuilding overlay after manual correction).
+        Passing False for a differently-sized image leaves zoom/minimap scale stale.
+        """
         self._pix_item.setPixmap(pixmap)
         rect = self._pix_item.boundingRect()
         self._scene.setSceneRect(rect)
