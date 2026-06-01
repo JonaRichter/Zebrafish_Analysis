@@ -169,6 +169,11 @@ class DetailTab(qt.QWidget):
         self._cache.clear()
         self._jobs.clear()
         self._pending.clear()
+        self._pending_reset_zoom = True  # preview always resets zoom to fit
+        self._manual_mode = False
+        self._manual_points = []
+        self._view.set_manual_mode(False)
+        self._view.clear_dots()
         self._full_pixmap = _numpy_to_qpixmap(rgb)
         self._metrics_label.setText(caption)
         self._btn_prev.setEnabled(False)
