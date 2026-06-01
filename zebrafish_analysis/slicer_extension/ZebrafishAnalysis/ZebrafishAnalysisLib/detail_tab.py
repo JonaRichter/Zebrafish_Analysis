@@ -248,7 +248,7 @@ class DetailTab(qt.QWidget):
             if event.key() == qt.Qt.Key_Left:
                 self._on_navigate(-1)
                 return
-        super().keyPressEvent(event)
+        qt.QWidget.keyPressEvent(self, event)
 
     # ------------------------------------------------------------------
     # Manual correction — tap mode

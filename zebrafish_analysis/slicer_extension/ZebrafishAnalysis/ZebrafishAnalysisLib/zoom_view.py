@@ -263,7 +263,7 @@ class ZoomableImageView(qt.QGraphicsView):
         """Fit image to view and record fit scale."""
         if self._orig_size[0] == 0:
             return
-        self.fitInView(self._scene.sceneRect(), qt.Qt.KeepAspectRatio)
+        self.fitInView(self._scene.sceneRect, qt.Qt.KeepAspectRatio)
         self._fit_scale = self.transform().m11()
         self._minimap.setVisible(False)
 
@@ -319,7 +319,7 @@ class ZoomableImageView(qt.QGraphicsView):
                 self.verticalScrollBar().value(),
             )
             self._is_dragging = False
-        super().mousePressEvent(event)
+        qt.QGraphicsView.mousePressEvent(self, event)
 
     def mouseMoveEvent(self, event):
         if self._drag_start is not None and (event.buttons() & qt.Qt.LeftButton):
@@ -332,7 +332,7 @@ class ZoomableImageView(qt.QGraphicsView):
                 self.horizontalScrollBar().setValue(self._drag_sb_origin[0] - delta.x())
                 self.verticalScrollBar().setValue(self._drag_sb_origin[1] - delta.y())
                 self._update_minimap()
-        super().mouseMoveEvent(event)
+        qt.QGraphicsView.mouseMoveEvent(self, event)
 
     def mouseReleaseEvent(self, event):
         if event.button() == qt.Qt.LeftButton:
@@ -341,7 +341,7 @@ class ZoomableImageView(qt.QGraphicsView):
             self._drag_start = None
             self._is_dragging = False
             self._update_cursor()
-        super().mouseReleaseEvent(event)
+        qt.QGraphicsView.mouseReleaseEvent(self, event)
 
     def keyPressEvent(self, event):
         """Arrow keys → navigate images."""
@@ -352,7 +352,7 @@ class ZoomableImageView(qt.QGraphicsView):
             if event.key() == qt.Qt.Key_Left:
                 self._on_navigate(-1)
                 return
-        super().keyPressEvent(event)
+        qt.QGraphicsView.keyPressEvent(self, event)
 
     def event(self, event):
         """Route pinch gesture events."""
@@ -366,14 +366,14 @@ class ZoomableImageView(qt.QGraphicsView):
                 if state == qt.Qt.GestureFinished:
                     self.setTransformationAnchor(qt.QGraphicsView.AnchorUnderMouse)
             return True
-        return super().event(event)
+        return qt.QGraphicsView.event(self, event)
 
     def scrollContentsBy(self, dx, dy):
-        super().scrollContentsBy(dx, dy)
+        qt.QGraphicsView.scrollContentsBy(self, dx, dy)
         self._update_minimap()
 
     def resizeEvent(self, event):
-        super().resizeEvent(event)
+        qt.QGraphicsView.resizeEvent(self, event)
         if self._orig_size[0] > 0:
             # Re-fit only if already at fit scale (don't reset user's zoom on resize)
             current = self.transform().m11()
@@ -408,7 +408,7 @@ class ZoomableImageView(qt.QGraphicsView):
     def _update_minimap(self) -> None:
         if not self._minimap.isVisible():
             return
-        visible = self.mapToScene(self.viewport().rect()).boundingRect()
+        visible = self.mapToScene(self.viewport().rect).boundingRect()
         full = self._scene.sceneRect()
         self._minimap.update_viewport(visible, full)
 
