@@ -98,15 +98,17 @@ class _MinimapOverlay(qt.QLabel):
             self._H = self._MAX_SIDE
             self._W = max(20, int(self._MAX_SIDE * pw / ph))
         self.setFixedSize(self._W, self._H)
+        # IgnoreAspectRatio: we already computed _W/_H to match the ratio,
+        # so forcing exact fill avoids grey bars from integer rounding.
         self._thumb = full_pixmap.scaled(
             self._W, self._H,
-            qt.Qt.KeepAspectRatio,
+            qt.Qt.IgnoreAspectRatio,
             qt.Qt.SmoothTransformation,
         )
-        self._thumb_w = self._thumb.width   # property in Slicer Qt
-        self._thumb_h = self._thumb.height
-        self._thumb_x = (self._W - self._thumb_w) // 2
-        self._thumb_y = (self._H - self._thumb_h) // 2
+        self._thumb_w = self._W
+        self._thumb_h = self._H
+        self._thumb_x = 0
+        self._thumb_y = 0
 
     def update_viewport(self, visible_rect, full_rect) -> None:
         """Repaint with updated viewport rectangle.
@@ -430,8 +432,10 @@ class ZoomableImageView(qt.QGraphicsView):
     def _reposition_minimap(self) -> None:
         """Position minimap bottom-left with 8 px margin."""
         # TODO: detect scalebar corner from result dict, place minimap in opposite corner
-        mw = self._minimap.width
-        mh = self._minimap.height
+        # Use _W/_H (our computed values) rather than Qt widget properties, which may be
+        # stale before setFixedSize is processed by the event loop.
+        mw = self._minimap._W
+        mh = self._minimap._H
         self._minimap.move(8, self.height - mh - 8)
         self._minimap.raise_()
 
