@@ -378,22 +378,39 @@ class ZebrafishAnalysisMainWidget:
         self._btn_run.setStyleSheet("font-weight: bold; padding: 6px; color: #888;")
         slicer.app.processEvents()  # paint "Loading models…" before blocking
 
+        import time as _time
+        _t0 = _time.time()
+
         def _set_btn_progress(i, total):
             pct = i / total if total > 0 else 0
+            # Hard-edge fill: two stops at same position = no smooth gradient
             s = f"{pct:.4f}"
-            if pct >= 1:
-                style = "background: #2d6e2d; color: white;"
+            if pct <= 0:
+                fill = "#404040"
+                style = f"background: {fill}; color: #888;"
+            elif pct >= 1:
+                style = "background: #2e7d32; color: white;"
             else:
                 style = (
-                    f"background: qlineargradient("
-                    f"x1:0, y1:0, x2:1, y2:0, "
-                    f"stop:0 #2d6e2d, stop:{s} #2d6e2d, "
+                    f"background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+                    f"stop:0 #2e7d32, stop:{s} #2e7d32, "
                     f"stop:{s} #404040, stop:1 #404040); color: white;"
                 )
+            # ETA
+            elapsed = _time.time() - _t0
+            if i > 0 and total > i:
+                remaining = elapsed / i * (total - i)
+                if remaining >= 60:
+                    eta = f"~{int(remaining // 60)}m {int(remaining % 60):02d}s left"
+                else:
+                    eta = f"~{int(remaining)}s left"
+                label = f"Image {i} / {total}  ·  {eta}"
+            else:
+                label = f"Image {i} / {total}"
             self._btn_run.setStyleSheet(
                 f"QPushButton {{ {style} font-weight: bold; padding: 6px; border: none; border-radius: 3px; }}"
             )
-            self._btn_run.setText(f"Image {i} / {total}")
+            self._btn_run.setText(label)
             slicer.app.processEvents()  # keep UI alive between images
 
         self._results = analyse_images(self._image_paths, params, _set_btn_progress)
