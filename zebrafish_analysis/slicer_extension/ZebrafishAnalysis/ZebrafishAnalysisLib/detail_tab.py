@@ -325,6 +325,7 @@ class DetailTab(qt.QWidget):
         self._manual_points = []
         self._full_pixmap = None
         self._pending_reset_zoom = False  # preserve zoom — user was zoomed in for precision
+        self._view.clear_dots()           # remove placement dots before overlay rebuild
 
         self._manual_status.setText("Manual correction applied.")
         self._btn_revert_auto.setVisible(True)
