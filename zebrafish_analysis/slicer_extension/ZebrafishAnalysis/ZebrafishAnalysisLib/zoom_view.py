@@ -315,8 +315,8 @@ class ZoomableImageView(qt.QGraphicsView):
         if event.button() == qt.Qt.LeftButton:
             self._drag_start = event.pos()
             self._drag_sb_origin = (
-                self.horizontalScrollBar().value(),
-                self.verticalScrollBar().value(),
+                self.horizontalScrollBar().value,
+                self.verticalScrollBar().value,
             )
             self._is_dragging = False
         qt.QGraphicsView.mousePressEvent(self, event)
