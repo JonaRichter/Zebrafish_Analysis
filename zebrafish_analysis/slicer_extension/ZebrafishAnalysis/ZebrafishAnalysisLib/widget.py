@@ -280,16 +280,24 @@ class ZebrafishAnalysisMainWidget:
         import os
         import cv2
         stubs = []
+        first_img_hw = None
         for p in paths:
             self._queue_list.addItem(os.path.basename(p))
             img = cv2.imread(p)
             if img is not None:
+                if first_img_hw is None:
+                    first_img_hw = img.shape[:2]
                 img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             stubs.append({"filename": os.path.basename(p), "original": img,
                           "mask": None, "error": None, "length": None})
         self._results = stubs
         self._gallery.populate(stubs)
         self._tabs.setCurrentIndex(0)
+        # Set default scale so spacing matches webapp's 5885/256 µm/mask-px convention.
+        # um_per_px is µm per original pixel; multiply by h_orig/256 in logic.py gives mask-space.
+        if first_img_hw is not None:
+            h_orig = first_img_hw[0]
+            self._um_per_px.value = round(5885.0 / h_orig, 4)
 
     def _on_detect_scale(self):
         from logic import detect_scalebar
@@ -345,11 +353,12 @@ class ZebrafishAnalysisMainWidget:
 
     def _on_run(self):
         from logic import analyse_images
+        import threading
+        import queue as _queue
+
         if not self._image_paths:
             slicer.util.warningDisplay("No images loaded.")
             return
-        self._progress.setVisible(True)
-        self._progress.setRange(0, len(self._image_paths))
 
         model_data = self._model_combo.currentData
         body_file, body_enc, eye_file = model_data
@@ -367,13 +376,44 @@ class ZebrafishAnalysisMainWidget:
             "eye_model_filename":  eye_file,
         }
 
-        def _progress_cb(i, n):
-            self._progress.setValue(i)
-            slicer.app.processEvents()
+        n = len(self._image_paths)
+        self._progress.setRange(0, n)
+        self._progress.setValue(0)
+        self._progress.setVisible(True)
+        self._btn_run.setEnabled(False)
+        self._btn_run.setText("⏳  Running…")
 
-        self._results = analyse_images(self._image_paths, params, _progress_cb)
-        self._progress.setVisible(False)
-        self._on_results_ready()
+        _result_box = [None]
+        _q = _queue.Queue()
+
+        def _worker():
+            def _cb(i, total):
+                _q.put(i)          # progress — main thread reads via timer
+            _result_box[0] = analyse_images(self._image_paths, params, _cb)
+            _q.put(None)           # sentinel: done
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+        def _poll():
+            try:
+                while True:
+                    item = _q.get_nowait()
+                    if item is None:              # finished
+                        self._run_poll_timer.stop()
+                        self._progress.setVisible(False)
+                        self._btn_run.setEnabled(True)
+                        self._btn_run.setText("▶  Run Analysis")
+                        self._results = _result_box[0]
+                        self._on_results_ready()
+                        return
+                    self._progress.setValue(item)
+            except _queue.Empty:
+                pass
+
+        self._run_poll_timer = qt.QTimer()
+        self._run_poll_timer.setInterval(40)
+        self._run_poll_timer.timeout.connect(_poll)
+        self._run_poll_timer.start()
 
     def _get_correction_params(self):
         """Return current hitl/threshold settings for manual correction curvature recompute."""
