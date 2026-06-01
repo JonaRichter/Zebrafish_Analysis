@@ -276,7 +276,7 @@ class DetailTab(qt.QWidget):
 
         if abs(dx) > abs(dy) and self._on_navigate:
             now = time.monotonic()
-            if now - self._swipe_last_time > 0.5:  # 500 ms cooldown blocks momentum
+            if now - self._swipe_last_time > 0.3:  # 300 ms cooldown blocks momentum
                 self._swipe_last_time = now
                 if dx > 0:
                     self._on_navigate(-1)  # fingers left → previous
