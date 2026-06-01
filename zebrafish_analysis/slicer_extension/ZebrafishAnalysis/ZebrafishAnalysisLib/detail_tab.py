@@ -306,7 +306,7 @@ class DetailTab(qt.QWidget):
             self._manual_mode = False
             self._view.set_manual_mode(False)
             self._manual_status.setText("Computing…")
-            self._apply_correction()
+            qt.QTimer.singleShot(0, self._apply_correction)
 
     def _apply_correction(self):
         """Apply 2-point manual correction to current result and refresh."""
