@@ -18,6 +18,7 @@ elif sys.path[0] != _LIB_DIR:
 
 import qt
 import numpy as np
+from zoom_view import ZoomableImageView
 
 
 def _numpy_to_qpixmap(rgb_array: np.ndarray) -> "qt.QPixmap":
@@ -40,19 +41,6 @@ def _build_rgb_array(result: dict) -> np.ndarray:
     return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
 
-class _ClickableLabel(qt.QLabel):
-    """QLabel that forwards left-click coords to a handler when click mode is active."""
-
-    def __init__(self, click_handler=None, parent=None):
-        super().__init__(parent)
-        self._click_handler = click_handler
-
-    def mousePressEvent(self, event):
-        if self._click_handler and event.button() == qt.Qt.LeftButton:
-            self._click_handler(event.x(), event.y())
-        super().mousePressEvent(event)
-
-
 class DetailTab(qt.QWidget):
     def __init__(self, on_navigate=None):
         super().__init__()
@@ -63,31 +51,24 @@ class DetailTab(qt.QWidget):
         self._cache = {}          # index → QPixmap  (main thread only)
         self._jobs = set()        # indices currently being built
         self._pending = {}        # index → rgb ndarray  (written by workers, read by poll)
+        self._pending_reset_zoom = True  # True=reset zoom on next pixmap update
         self.setFocusPolicy(qt.Qt.StrongFocus)
 
         self._manual_mode = False
         self._manual_points = []   # list of (row, col) in original image space
         self._params_getter = None  # set by widget after construction
-        self._swipe_locked = False  # True after nav fires; unlocks when momentum decays to ~0
 
         self._poll_timer = qt.QTimer()
         self._poll_timer.setInterval(40)
         self._poll_timer.timeout.connect(self._poll_pending)
         self._poll_timer.start()
 
-        self._image_label = _ClickableLabel(self._on_image_click)
-        self._image_label.setText("Select an image from the Gallery.")
-        self._image_label.setAlignment(qt.Qt.AlignCenter)
-        self._image_label.setStyleSheet("background: #1a1a1a; color: #666;")
-        self._image_label.setMinimumHeight(300)
-        self._image_label.setSizePolicy(
-            qt.QSizePolicy.Ignored, qt.QSizePolicy.Ignored
-        )
+        # Main image viewer
+        self._view = ZoomableImageView()
+        self._view._on_navigate = self._on_navigate
+        self._view._tap_handler = self._on_image_tap
 
-        self._metrics_label = qt.QLabel("")
-        self._metrics_label.setWordWrap(True)
-        self._metrics_label.setStyleSheet("font-size: 12px; padding: 4px;")
-
+        # Manual correction buttons
         self._btn_manual_adjust = qt.QPushButton("✏ Manual Adjust")
         self._btn_revert_auto = qt.QPushButton("↩ Revert to Auto")
         self._btn_revert_auto.setVisible(False)
@@ -99,6 +80,7 @@ class DetailTab(qt.QWidget):
         self._btn_manual_adjust.clicked.connect(self._on_manual_adjust_clicked)
         self._btn_revert_auto.clicked.connect(self._on_revert_auto_clicked)
 
+        # Navigation buttons
         self._btn_prev = qt.QPushButton("◄")
         self._btn_next = qt.QPushButton("►")
         self._nav_label = qt.QLabel("")
@@ -111,6 +93,11 @@ class DetailTab(qt.QWidget):
 
         self._btn_prev.clicked.connect(lambda: self._on_navigate and self._on_navigate(-1))
         self._btn_next.clicked.connect(lambda: self._on_navigate and self._on_navigate(1))
+
+        # Metrics label
+        self._metrics_label = qt.QLabel("")
+        self._metrics_label.setWordWrap(True)
+        self._metrics_label.setStyleSheet("font-size: 12px; padding: 4px;")
 
         _nav_row = qt.QHBoxLayout()
         _nav_row.addStretch(1)
@@ -126,7 +113,7 @@ class DetailTab(qt.QWidget):
         _manual_row.addStretch(1)
 
         layout = qt.QVBoxLayout(self)
-        layout.addWidget(self._image_label, 1)
+        layout.addWidget(self._view, 1)
         layout.addLayout(_manual_row, 0)
         layout.addWidget(self._manual_status, 0)
         layout.addLayout(_nav_row, 0)
@@ -140,11 +127,13 @@ class DetailTab(qt.QWidget):
     # ------------------------------------------------------------------
 
     def show_result(self, index: int, results: list) -> None:
-        # Exit click mode when navigating to a new image
+        # Exit manual mode when navigating to a new image
         if self._manual_mode:
             self._manual_mode = False
             self._manual_points = []
             self._manual_status.setVisible(False)
+            self._view.set_manual_mode(False)
+            self._view.clear_dots()
 
         self._results = results
         self._current_idx = index
@@ -161,12 +150,12 @@ class DetailTab(qt.QWidget):
         self._manual_status.setText("")
         self._manual_status.setVisible(False)
 
+        self._pending_reset_zoom = True  # navigation → always reset zoom
         if index in self._cache:
             self._full_pixmap = self._cache[index]
             qt.QTimer.singleShot(0, self._update_display)
         else:
-            self._image_label.setPixmap(qt.QPixmap())
-            self._image_label.setText("Loading…")
+            self._view.show_placeholder("Loading…")
             self._full_pixmap = None
             self._start_job(index)
 
@@ -185,7 +174,6 @@ class DetailTab(qt.QWidget):
         self._btn_prev.setEnabled(False)
         self._btn_next.setEnabled(False)
         self._nav_label.setText("")
-        self._image_label.setText("")
         qt.QTimer.singleShot(0, self._update_display)
 
     def invalidate_cache(self):
@@ -232,8 +220,7 @@ class DetailTab(qt.QWidget):
             self._cache[idx] = pixmap
             if idx == self._current_idx:
                 self._full_pixmap = pixmap
-                self._image_label.setText("")
-                self._update_display()
+                self._view.set_pixmap(pixmap, reset_zoom=self._pending_reset_zoom)
 
     def _schedule_preload(self, center: int) -> None:
         for offset in (-1, 1, -2, 2):
@@ -246,13 +233,7 @@ class DetailTab(qt.QWidget):
     def _update_display(self) -> None:
         if self._full_pixmap is None or self._full_pixmap.isNull():
             return
-        scaled = self._full_pixmap.scaled(
-            self._image_label.width,
-            self._image_label.height,
-            qt.Qt.KeepAspectRatio,
-            qt.Qt.SmoothTransformation,
-        )
-        self._image_label.setPixmap(scaled)
+        self._view.set_pixmap(self._full_pixmap, reset_zoom=self._pending_reset_zoom)
 
     def keyPressEvent(self, event):
         if self._on_navigate:
@@ -264,48 +245,20 @@ class DetailTab(qt.QWidget):
                 return
         super().keyPressEvent(event)
 
-    def wheelEvent(self, event):
-        """Two-finger horizontal trackpad swipe → navigate one image per gesture.
-
-        Momentum-proof: lock after firing, unlock only when |dx| decays to ~0.
-        macOS momentum always decays to 0; a new deliberate swipe starts from 0.
-        No timers or phase detection needed.
-        """
-        dx = event.angleDelta().x()
-        dy = event.angleDelta().y()
-
-        if abs(dx) > abs(dy) and self._on_navigate:
-            if self._swipe_locked:
-                if abs(dx) < 8:          # momentum exhausted — ready for next swipe
-                    self._swipe_locked = False
-            else:
-                if abs(dx) > 20:         # deliberate swipe, not micro-jitter
-                    self._swipe_locked = True
-                    if dx > 0:
-                        self._on_navigate(-1)   # fingers left → previous
-                    else:
-                        self._on_navigate(1)    # fingers right → next
-            event.accept()
-        else:
-            super().wheelEvent(event)
-
-    def resizeEvent(self, event):
-        self._update_display()
-
     # ------------------------------------------------------------------
-    # Manual correction — click mode
+    # Manual correction — tap mode
     # ------------------------------------------------------------------
 
     def _on_manual_adjust_clicked(self):
-        """Enter click mode to place head/tail points."""
+        """Enter tap mode to place head/tail points."""
         if not self._results:
             return
         self._manual_mode = True
         self._manual_points = []
         self._manual_status.setText("Click HEAD point (1/2)")
         self._manual_status.setVisible(True)
-        # Restore clean overlay (no stale dots)
-        self._update_display()
+        self._view.set_manual_mode(True)
+        self._view.clear_dots()
 
     def _on_revert_auto_clicked(self):
         """Restore auto-computed values for current fish."""
@@ -325,94 +278,30 @@ class DetailTab(qt.QWidget):
         self._btn_revert_auto.setVisible(False)
         self._btn_manual_adjust.setText("✏ Manual Adjust")
         self._metrics_label.setText(_format_metrics(result))
+        self._view.set_manual_mode(False)
+        self._view.clear_dots()
 
+        self._pending_reset_zoom = False  # preserve zoom after correction rebuild
         self._start_job(self._current_idx)
 
-    def _on_image_click(self, click_x, click_y):
-        """Handle a left-click on the image label during manual mode."""
+    def _on_image_tap(self, row: int, col: int) -> None:
+        """Called by ZoomableImageView tap handler with pre-mapped (row, col) coords."""
         if not self._manual_mode:
             return
-        coords = self._label_to_orig_coords(click_x, click_y)
-        if coords is None:
-            return
 
-        self._manual_points.append(coords)
-        self._redraw_with_dots()
+        self._manual_points.append((row, col))
+        self._view.add_dot(
+            row, col,
+            qt.QColor(0, 220, 0) if len(self._manual_points) == 1 else qt.QColor(220, 0, 0)
+        )
 
         if len(self._manual_points) == 1:
             self._manual_status.setText("Click TAIL point (2/2)")
         elif len(self._manual_points) >= 2:
             self._manual_mode = False
+            self._view.set_manual_mode(False)
             self._manual_status.setText("Computing…")
             self._apply_correction()
-
-    def _label_to_orig_coords(self, click_x, click_y):
-        """Map label pixel (x, y) → original image (row, col).  Returns None on failure."""
-        if self._full_pixmap is None or self._full_pixmap.isNull():
-            return None
-        if not self._results or self._current_idx >= len(self._results):
-            return None
-
-        orig = self._results[self._current_idx].get("original")
-        if orig is None:
-            return None
-
-        orig_h, orig_w = orig.shape[:2]
-        label_w = self._image_label.width
-        label_h = self._image_label.height
-        pix_w = self._full_pixmap.width()
-        pix_h = self._full_pixmap.height()
-
-        if pix_w == 0 or pix_h == 0 or label_w == 0 or label_h == 0:
-            return None
-
-        scale = min(label_w / pix_w, label_h / pix_h)
-        offset_x = (label_w - pix_w * scale) / 2
-        offset_y = (label_h - pix_h * scale) / 2
-
-        img_col = (click_x - offset_x) / scale
-        img_row = (click_y - offset_y) / scale
-
-        col = int(np.clip(img_col, 0, orig_w - 1))
-        row = int(np.clip(img_row, 0, orig_h - 1))
-        return (row, col)
-
-    def _redraw_with_dots(self):
-        """Draw placed manual points on a copy of the current scaled pixmap."""
-        if self._full_pixmap is None or self._full_pixmap.isNull():
-            return
-
-        label_w = self._image_label.width
-        label_h = self._image_label.height
-        pix_w = self._full_pixmap.width()
-        pix_h = self._full_pixmap.height()
-
-        scaled = self._full_pixmap.scaled(
-            label_w, label_h, qt.Qt.KeepAspectRatio, qt.Qt.SmoothTransformation
-        )
-
-        if not self._manual_points:
-            self._image_label.setPixmap(scaled)
-            return
-
-        # scale maps original-image coords → pixmap coords (no letterbox offsets:
-        # the label centers the scaled pixmap automatically, so dots must be in
-        # pixmap space, not label space)
-        scale = min(label_w / pix_w, label_h / pix_h)
-        pix_draw_w = pix_w * scale
-        pix_draw_h = pix_h * scale
-
-        colors = [qt.QColor(0, 220, 0), qt.QColor(220, 0, 0)]  # green=head, red=tail
-        painter = qt.QPainter(scaled)
-        for i, (row, col) in enumerate(self._manual_points):
-            lx = int(np.clip(col * scale, 8, pix_draw_w - 9))
-            ly = int(np.clip(row * scale, 8, pix_draw_h - 9))
-            c = colors[i]
-            painter.setPen(qt.QPen(c, 3))
-            painter.setBrush(qt.QBrush(qt.QColor(c.red(), c.green(), c.blue(), 180)))
-            painter.drawEllipse(lx - 8, ly - 8, 16, 16)
-        painter.end()
-        self._image_label.setPixmap(scaled)
 
     def _apply_correction(self):
         """Apply 2-point manual correction to current result and refresh."""
@@ -429,7 +318,8 @@ class DetailTab(qt.QWidget):
         self._cache.pop(self._current_idx, None)
         self._jobs.discard(self._current_idx)
         self._manual_points = []
-        self._full_pixmap = None  # force _poll_pending to update display on rebuild
+        self._full_pixmap = None
+        self._pending_reset_zoom = False  # preserve zoom — user was zoomed in for precision
 
         self._manual_status.setText("Manual correction applied.")
         self._btn_revert_auto.setVisible(True)
