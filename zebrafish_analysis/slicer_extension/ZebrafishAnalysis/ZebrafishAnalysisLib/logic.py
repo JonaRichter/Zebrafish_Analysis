@@ -11,20 +11,22 @@ Export functions (export_excel, export_csv) live in export.py.
 
 import os
 import tempfile
-import numpy as np  # must precede torch imports to enable the numpy bridge
 import cv2
-
-from zebrafish_analysis.core.scalebar import detect_scalebar as _detect_scalebar
+import numpy as np
 
 _MODEL_CACHE: dict = {}
+_original_load_unet = None  # set on first use by _install_model_cache()
 
-# ---------------------------------------------------------------------------
-# Segmentation model cache — monkey-patch seg._load_unet_model so models are
-# loaded once and reused. seg.py is sacred (not modified directly).
-# ---------------------------------------------------------------------------
-import zebrafish_analysis.core.seg as _seg_module
 
-_original_load_unet = _seg_module._load_unet_model
+def _install_model_cache():
+    """Lazily import seg and install the caching monkey-patch (first call only)."""
+    global _original_load_unet
+    if _original_load_unet is not None:
+        return
+    import numpy as np  # noqa: F401 — must precede torch to enable numpy bridge
+    import zebrafish_analysis.core.seg as _seg_module
+    _original_load_unet = _seg_module._load_unet_model
+    _seg_module._load_unet_model = _cached_load_unet
 
 
 def _cached_load_unet(model_path=None, repo_id=None, filename=None, label="model",
@@ -40,15 +42,13 @@ def _cached_load_unet(model_path=None, repo_id=None, filename=None, label="model
     return _MODEL_CACHE[cache_key]
 
 
-_seg_module._load_unet_model = _cached_load_unet
-
-
 def preload_models(params: dict) -> None:
     """Load and cache all models needed for the given params.
 
     Safe to call from a background thread — only does file I/O and weight
     deserialization, no parallel OMP inference.
     """
+    _install_model_cache()
     from zebrafish_analysis.core.length import load_model
 
     if params.get("curvature", True) and "curvature" not in _MODEL_CACHE:
@@ -110,6 +110,8 @@ def detect_scalebar(image_path: str, label_um: float | None = None) -> dict:
     Returns the dict produced by core detect_scalebar, or a failure dict
     if the image cannot be read.
     """
+    import cv2
+    from zebrafish_analysis.core.scalebar import detect_scalebar as _detect_scalebar
     img_bgr = cv2.imread(image_path)
     if img_bgr is None:
         return {"success": False, "bar_found": False,
@@ -146,6 +148,7 @@ def analyse_images(image_paths: list, params: dict,
         schema. On per-image errors the numeric fields are None and
         ``error`` holds the exception message.
     """
+    _install_model_cache()
     from zebrafish_analysis.core.seg import segmentation_pipeline
     from zebrafish_analysis.core.length import (
         load_model,
