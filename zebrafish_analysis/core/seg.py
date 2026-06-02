@@ -6,13 +6,18 @@ import torch
 from segmentation_models_pytorch import Unet
 from huggingface_hub import hf_hub_download
 
-target_size = (256, 256)
+_UNET_CACHE = {}  # lazy-loaded cache keyed by (filename_or_path, encoder_name)
 
 def _load_unet_model(model_path=None, repo_id=None, filename=None, label="model", revision="main", force_download=False, encoder_name="vgg16"):
     """
     Load a binary Unet model from a local path or from Hugging Face Hub.
     Returns the model instance when successful, otherwise None.
     """
+    cache_key = (model_path or filename, encoder_name)
+    if cache_key in _UNET_CACHE:
+        print(f"{label.capitalize()} served from cache.")
+        return _UNET_CACHE[cache_key]
+
     model = Unet(encoder_name=encoder_name, encoder_weights="imagenet", in_channels=3, classes=1)
     resolved_path = None
 
@@ -40,6 +45,7 @@ def _load_unet_model(model_path=None, repo_id=None, filename=None, label="model"
         model.load_state_dict(torch.load(resolved_path, map_location=torch.device('cpu')))
         model.eval()
         print(f"{label.capitalize()} loaded from {resolved_path}")
+        _UNET_CACHE[cache_key] = model
         return model
     except Exception as exc:
         print(f"Failed to load {label} from {resolved_path}: {exc}")
@@ -47,32 +53,54 @@ def _load_unet_model(model_path=None, repo_id=None, filename=None, label="model"
 
 
 def segmentation_pipeline(
-    folder_path,
+    folder_path=None,
+    target_size=(256, 256),
+    file_list=None,
     include_eyes=False,
     body_repo_id="markdanielarndt/Zebrafish_Segmentation",
     body_model_filename="best_model_body_3400_vgg19.pth",
     body_encoder_name="vgg19",
     body_revision="main",
-    body_force_download=True,
+    body_force_download=False,
     eye_model_path=None,
     eye_repo_id="markdanielarndt/Zebrafish_Segmentation",
     eye_model_filename="best_model_eye_3400.pth",
     eye_encoder_name="vgg16",
+    include_edema=False,
+    edema_model_path=None,
+    edema_repo_id="markdanielarndt/Zebrafish_Segmentation",
+    edema_model_filename="best_model_edema_3400_focal.pth",
+    edema_encoder_name="vgg19",
 ):
     """
-    Perform body segmentation on all images in the specified folder.
+    Perform body segmentation on all images in the specified folder or file list.
+
+    Pass either `folder_path` (directory) or `file_list` (sorted list of absolute paths).
+    When `file_list` is provided it takes precedence and preserves the given order.
 
     Optional eye segmentation can be enabled by setting include_eyes=True.
+    Optional edema segmentation can be enabled by setting include_edema=True.
 
     Returns:
         - default: (original_images, segmented_images, grown_images)
         - if include_eyes=True: (original_images, segmented_images, grown_images, eyes_images)
+        - if include_eyes=True and include_edema=True: (original_images, segmented_images, grown_images, eyes_images, edema_images)
     """
-    images = load_images_from_path(folder_path)
+    if file_list is not None:
+        images = []
+        for fp in file_list:
+            img = cv2.imread(fp)
+            if img is not None:
+                images.append(img)
+            else:
+                print(f"Warning: could not load {fp}")
+    else:
+        images = load_images_from_path(folder_path)
     segmented_images = []
     grown_images = []
     original_images = []
     eyes_images = []
+    edema_images = []
 
     print(f"Loading body segmentation model from {body_repo_id}/{body_model_filename} (revision={body_revision}, force_download={body_force_download})...")
     loaded_model = _load_unet_model(
@@ -102,13 +130,29 @@ def segmentation_pipeline(
         else:
             print("Eye model loaded successfully!")
 
+    edema_model = None
+    if include_edema:
+        print(f"Loading edema segmentation model from {edema_repo_id}/{edema_model_filename}...")
+        edema_model = _load_unet_model(
+            model_path=edema_model_path,
+            repo_id=edema_repo_id,
+            filename=edema_model_filename,
+            label="edema model",
+            encoder_name=edema_encoder_name,
+        )
+        if edema_model is None:
+            print(f"WARNING: Edema model unavailable at {edema_repo_id}/{edema_model_filename}. Returning empty edema masks.")
+        else:
+            print("Edema model loaded successfully!")
+
     # Preprocessing parameters
     mean = np.array([0.485, 0.456, 0.406])
     std = np.array([0.229, 0.224, 0.225])
 
+    cv2_size = (target_size[1], target_size[0])  # cv2 uses (width, height)
     for img in images:
         original_image = np.array(img)
-        img = cv2.resize(img, target_size, interpolation=cv2.INTER_LINEAR)
+        img = cv2.resize(img, cv2_size, interpolation=cv2.INTER_LINEAR)
 
         processed_image = (img / 255.0 - mean) / std
         input_image = torch.tensor(processed_image, dtype=torch.float32).permute(2, 0, 1).unsqueeze(0)
@@ -127,9 +171,20 @@ def segmentation_pipeline(
                 segmented_eyes_array = np.zeros(target_size, dtype=np.uint8)
             eyes_images.append(segmented_eyes_array)
 
+        if include_edema:
+            if edema_model is not None:
+                segmented_edema, _ = segment_fish(input_image, edema_model, biggest_only=False)
+                segmented_edema_array = np.array(segmented_edema)
+            else:
+                segmented_edema_array = np.zeros((target_size[0], target_size[1]), dtype=np.uint8)
+            edema_images.append(segmented_edema_array)
+
         grown_images.append(grown_image)
         segmented_images.append(filled_image)
         original_images.append(original_image)
+
+    if include_eyes and include_edema:
+        return original_images, segmented_images, grown_images, eyes_images, edema_images
 
     if include_eyes:
         return original_images, segmented_images, grown_images, eyes_images

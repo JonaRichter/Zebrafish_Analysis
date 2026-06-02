@@ -71,7 +71,13 @@ def compute_manual_length(seg_mask, point1, point2, spacing):
             [seg_mask_bin.shape[0] - 1, seg_mask_bin.shape[1] - 1],
         )
 
-        # Snap points outside mask to nearest mask pixel
+        # Track whether clicked points were outside the mask so we can extend the path later
+        p1_outside = not seg_mask_bin[p1_int[0], p1_int[1]]
+        p2_outside = not seg_mask_bin[p2_int[0], p2_int[1]]
+        p1_anchor = p1_int.copy()  # actual clicked position (clamped to image bounds)
+        p2_anchor = p2_int.copy()
+
+        # Snap points outside mask to nearest mask pixel for internal routing
         def _snap(pt_int, pt_float):
             if seg_mask_bin[pt_int[0], pt_int[1]]:
                 return pt_int
@@ -118,6 +124,20 @@ def compute_manual_length(seg_mask, point1, point2, spacing):
         if len(path) >= 2:
             keep = np.concatenate([[True], np.any(np.diff(path, axis=0) != 0, axis=1)])
             path = path[keep]
+
+        # If clicked points were outside the mask, extend path with straight-line segments
+        # from the actual clicked position to the mask boundary entry/exit point.
+        if p1_outside:
+            n_ext = max(2, int(np.ceil(np.linalg.norm(p1_anchor.astype(float) - p1_int.astype(float)))) + 1)
+            t = np.linspace(0, 1, n_ext)[:-1]  # exclude p1_int — already path[0]
+            ext = np.round(p1_anchor[None, :] * (1 - t[:, None]) + p1_int[None, :] * t[:, None]).astype(int)
+            path = np.vstack([ext, path])
+
+        if p2_outside:
+            n_ext = max(2, int(np.ceil(np.linalg.norm(p2_anchor.astype(float) - p2_int.astype(float)))) + 1)
+            t = np.linspace(0, 1, n_ext)[1:]  # exclude p2_int — already path[-1]
+            ext = np.round(p2_int[None, :] * (1 - t[:, None]) + p2_anchor[None, :] * t[:, None]).astype(int)
+            path = np.vstack([path, ext])
 
         # Arc length
         pf = path.astype(float)
