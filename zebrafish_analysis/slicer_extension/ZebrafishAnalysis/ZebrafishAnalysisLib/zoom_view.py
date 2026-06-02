@@ -89,8 +89,8 @@ class _MinimapOverlay(qt.QLabel):
         if full_pixmap.isNull():
             self._thumb = None
             return
-        pw = full_pixmap.width   # property in Slicer Qt
-        ph = full_pixmap.height
+        pw = full_pixmap.width()
+        ph = full_pixmap.height()
         if pw >= ph:
             self._W = self._MAX_SIDE
             self._H = max(20, int(self._MAX_SIDE * ph / pw))
@@ -376,7 +376,7 @@ class ZoomableImageView(qt.QGraphicsView):
         if event.type() == qt.QEvent.Gesture:
             pinch = event.gesture(qt.Qt.PinchGesture)
             if pinch:
-                state = pinch.state()
+                state = pinch.state
                 if state == qt.Qt.GestureStarted:
                     self.setTransformationAnchor(qt.QGraphicsView.AnchorViewCenter)
                 self._apply_zoom(pinch.scaleFactor())
