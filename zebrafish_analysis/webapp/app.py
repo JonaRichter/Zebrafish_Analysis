@@ -2,7 +2,7 @@ import gradio as gr
 import tempfile, os, shutil
 from typing import List, Optional, Tuple
 from zebrafish_analysis.core.seg import segmentation_pipeline
-from zebrafish_analysis.core.length import load_model, get_fish_length_circles_fixed, classification_curvature, tube_length_border2border, compute_eye_metrics
+from zebrafish_analysis.core.length import load_model, classification_curvature, tube_length_border2border, compute_eye_metrics
 from zebrafish_analysis.core.manual import compute_manual_length as _compute_manual_length
 import openpyxl, io
 from openpyxl.drawing.image import Image as ExcelImage
@@ -10,6 +10,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image as PILImage
 import cv2
+from scipy.ndimage import distance_transform_edt, gaussian_filter
+from skimage.graph import route_through_array
+import time
 
 try:
     import torch
@@ -28,11 +31,12 @@ except Exception:
 MODEL_CACHE = {}  # lazy-loaded cache keyed by model filename
 
 # Registry of available segmentation models
-# Each entry: display name -> (body_hf_filename, body_encoder_name, eye_hf_filename)
-# eye_hf_filename=None means use the default eye model
+# Each entry: display name -> (body_hf_filename, body_encoder_name, eye_hf_filename, target_size, edema_hf_filename)
+# None for eye/edema filenames means use the pipeline default
 SEG_MODEL_OPTIONS = {
-    "General Model": ("best_model_body_3400_vgg19.pth", "vgg19", None),
-    "Fine-tuned DESY": ("best_model_body_finetuned.pth", "vgg19", "best_model_eye_finetuned.pth"),
+    "Fast & Easy (256 px)": ("best_model_body_3400_vgg19.pth", "vgg19", None, 256, None),
+    "Complex & Slower (512 px)": ("best_model_body_512.pth", "vgg19", "best_model_eye_512.pth", 512, None),
+    "Fine-tuned DESY": ("desy_body_512_finetuned.pth", "vgg19", "desy_eye_512_finetuned.pth", 512, "desy_edema_512_finetuned.pth"),
 }
 
 def _ensure_model():
@@ -65,7 +69,7 @@ def _to_numpy(img):
             img = ((img - img_min) / denom * 255.0).clip(0,255).astype(np.uint8)
     return img
 
-def _make_boxplots_image(fish_lengths, curvatures, ratios, eye_areas=None, eye_diameters=None):
+def _make_boxplots_image(fish_lengths, curvatures, ratios, eye_areas=None, edema_areas=None):
     def _clean_numeric(vals):
         out = []
         for v in (vals or []):
@@ -77,7 +81,7 @@ def _make_boxplots_image(fish_lengths, curvatures, ratios, eye_areas=None, eye_d
     curvatures_clean = _clean_numeric(curvatures)
     ratios_clean = _clean_numeric(ratios)
     eye_areas_clean = _clean_numeric(eye_areas)
-    eye_diameters_clean = _clean_numeric(eye_diameters)
+    edema_areas_clean = _clean_numeric(edema_areas)
 
     # Count how many plots we need
     num_plots = sum([
@@ -85,26 +89,26 @@ def _make_boxplots_image(fish_lengths, curvatures, ratios, eye_areas=None, eye_d
         bool(curvatures_clean),
         bool(ratios_clean),
         bool(eye_areas_clean),
-        bool(eye_diameters_clean),
+        bool(edema_areas_clean),
     ])
     if num_plots == 0:
         num_plots = 1  # At least one subplot
-    
+
     fig = plt.figure(figsize=(5*num_plots, 5))
     plot_idx = 1
-    
+
     if fish_lengths_clean:
         plt.subplot(1, num_plots, plot_idx)
         plt.boxplot(fish_lengths_clean, vert=True, patch_artist=True)
         plt.title("Fish Lengths"); plt.ylabel("Length (µm)")
         plot_idx += 1
-    
+
     if curvatures_clean:
         plt.subplot(1, num_plots, plot_idx)
         plt.boxplot(curvatures_clean, vert=True, patch_artist=True)
         plt.title("Curvatures"); plt.ylabel("Curvature")
         plot_idx += 1
-    
+
     if ratios_clean:
         plt.subplot(1, num_plots, plot_idx)
         plt.boxplot(ratios_clean, vert=True, patch_artist=True)
@@ -117,11 +121,11 @@ def _make_boxplots_image(fish_lengths, curvatures, ratios, eye_areas=None, eye_d
         plt.title("Eye Areas"); plt.ylabel("Area (µm²)")
         plot_idx += 1
 
-    if eye_diameters_clean:
+    if edema_areas_clean:
         plt.subplot(1, num_plots, plot_idx)
-        plt.boxplot(eye_diameters_clean, vert=True, patch_artist=True)
-        plt.title("Eye Diameters"); plt.ylabel("Diameter (µm)")
-    
+        plt.boxplot(edema_areas_clean, vert=True, patch_artist=True)
+        plt.title("Edema Areas"); plt.ylabel("Area (µm²)")
+
     img_bytes = io.BytesIO()
     plt.tight_layout()
     plt.savefig(img_bytes, format='png', bbox_inches='tight')
@@ -129,104 +133,134 @@ def _make_boxplots_image(fish_lengths, curvatures, ratios, eye_areas=None, eye_d
     img_bytes.seek(0)
     return img_bytes.getvalue()
 
+_EXCEL_FORBIDDEN = str.maketrans('', '', r'/\?*[]:'+"'")
+_EXCEL_MAX_SHEET_NAME = 31
+
+def _sanitize_sheet_name(name: str, default: str = "Fish Data") -> str:
+    name = (name or "").strip().translate(_EXCEL_FORBIDDEN)
+    return name[:_EXCEL_MAX_SHEET_NAME] if name else default
+
 def write_lengths_to_excel_bytes(
     filenames,
     fish_lengths,
     curvatures,
     ratios,
     eye_areas,
-    eye_diameters,
+    edema_areas,
     threshold_used,
     threshold_value,
     boxplot_png_bytes,
+    sheet_name: str = "Fish Data",
+    exclusions=None,
 ):
+    EXCLUDED = "Excluded"
+    exclusions = exclusions or {}
+
+    def _is_included(idx, metric):
+        return exclusions.get(idx, {}).get(metric, True)
+
     wb = openpyxl.Workbook()
     sh = wb.active
-    sh.title = "Fish Data"
-    # Build header dynamically based on what data we have
+    sh.title = _sanitize_sheet_name(sheet_name)
+
     header = ["Filename"]
     if fish_lengths: header.append("Fish Length (µm)")
     if curvatures: header.append("Curvature")
     if ratios: header.append("Length/Straight Line Ratio")
     if eye_areas: header.append("Eye Area (µm²)")
-    if eye_diameters: header.append("Eye Diameter (µm)")
+    if edema_areas: header.append("Edema Area (µm²)")
     sh.append(header)
-    
+
     for i, fname in enumerate(filenames):
         row = [fname]
         if fish_lengths:
             L = fish_lengths[i] if i < len(fish_lengths) else "N/A"
-            row.append(L)
+            row.append(L if _is_included(i, 'fish_length') else EXCLUDED)
         if curvatures:
             c = curvatures[i] if i < len(curvatures) else "N/A"
             if c == 5:
                 c = "Not Classified"
-            row.append(c)
+            row.append(c if _is_included(i, 'curvature') else EXCLUDED)
         if ratios:
             r = ratios[i] if i < len(ratios) else "N/A"
-            row.append(r)
+            row.append(r if _is_included(i, 'ratio') else EXCLUDED)
         if eye_areas:
             ea = eye_areas[i] if i < len(eye_areas) and eye_areas[i] is not None else "N/A"
-            row.append(ea)
-        if eye_diameters:
-            ed = eye_diameters[i] if i < len(eye_diameters) and eye_diameters[i] is not None else "N/A"
-            row.append(ed)
+            row.append(ea if _is_included(i, 'eye_area') else EXCLUDED)
+        if edema_areas:
+            eda = edema_areas[i] if i < len(edema_areas) and edema_areas[i] is not None else "N/A"
+            row.append(eda if _is_included(i, 'edema_area') else EXCLUDED)
         sh.append(row)
 
-    def _stats(vals):
-        clean_vals = []
-        for v in vals:
-            if isinstance(v, (int, float)) and np.isfinite(v):
-                clean_vals.append(float(v))
-        if not clean_vals: return ("N/A",)*5
-        vals_sorted = sorted(clean_vals); n = len(vals_sorted)
-        median = vals_sorted[n//2]
-        p25 = vals_sorted[int(n*0.25)]
-        p75 = vals_sorted[int(n*0.75)]
-        mean = sum(vals_sorted)/n
-        std = (sum((x-mean)**2 for x in vals_sorted)/n)**0.5
-        return median, p25, p75, mean, std
+    def _stats(vals, metric_key):
+        clean_vals = np.array([
+            float(v) for idx, v in enumerate(vals or [])
+            if _is_included(idx, metric_key)
+            and isinstance(v, (int, float)) and np.isfinite(v)
+        ])
+        if len(clean_vals) == 0:
+            return ("N/A",) * 5
+        return (
+            np.median(clean_vals),
+            np.percentile(clean_vals, 25),
+            np.percentile(clean_vals, 75),
+            np.mean(clean_vals),
+            np.std(clean_vals),
+        )
 
     sh.append([])
     if threshold_used:
         sh.append([f"Threshold used; statistics may be unreliable (threshold: {threshold_value})"])
-    sh.append(["Statistics"])
-    
+
+    excluded_counts = {}
+    for metric in ('fish_length', 'curvature', 'ratio', 'eye_area', 'edema_area'):
+        excluded_counts[metric] = sum(
+            1 for i in range(len(filenames)) if not _is_included(i, metric)
+        )
+    excl_note_parts = [f"{k.replace('_', ' ')}: {v}" for k, v in excluded_counts.items() if v > 0]
+    if excl_note_parts:
+        sh.append(["Excluded from statistics — " + ", ".join(excl_note_parts)])
+
+    sh.append(["Statistics (excluded values not counted)"])
+
     if fish_lengths:
-        medL,p25L,p75L,meanL,stdL = _stats(fish_lengths)
+        medL,p25L,p75L,meanL,stdL = _stats(fish_lengths, 'fish_length')
         sh.append(["Median Length (µm)", medL]); sh.append(["25th Percentile Length (µm)", p25L])
         sh.append(["75th Percentile Length (µm)", p75L]); sh.append(["Mean Length (µm)", meanL])
         sh.append(["Standard Deviation Length (µm)", stdL])
-    
+
     if curvatures:
-        medC,p25C,p75C,meanC,stdC = _stats(curvatures)
+        medC,p25C,p75C,meanC,stdC = _stats(curvatures, 'curvature')
         sh.append(["Median Curvature", medC]); sh.append(["25th Percentile Curvature", p25C])
         sh.append(["75th Percentile Curvature", p75C]); sh.append(["Mean Curvature", meanC])
         sh.append(["Standard Deviation Curvature", stdC])
-    
+
     if ratios:
-        medR,p25R,p75R,meanR,stdR = _stats(ratios)
+        medR,p25R,p75R,meanR,stdR = _stats(ratios, 'ratio')
         sh.append(["Median Ratio", medR]); sh.append(["25th Percentile Ratio", p25R])
         sh.append(["75th Percentile Ratio", p75R]); sh.append(["Mean Ratio", meanR])
         sh.append(["Standard Deviation Ratio", stdR])
 
     if eye_areas:
-        medEA,p25EA,p75EA,meanEA,stdEA = _stats(eye_areas)
+        medEA,p25EA,p75EA,meanEA,stdEA = _stats(eye_areas, 'eye_area')
         sh.append(["Median Eye Area (µm²)", medEA]); sh.append(["25th Percentile Eye Area (µm²)", p25EA])
         sh.append(["75th Percentile Eye Area (µm²)", p75EA]); sh.append(["Mean Eye Area (µm²)", meanEA])
         sh.append(["Standard Deviation Eye Area (µm²)", stdEA])
 
-    if eye_diameters:
-        medED,p25ED,p75ED,meanED,stdED = _stats(eye_diameters)
-        sh.append(["Median Eye Diameter (µm)", medED]); sh.append(["25th Percentile Eye Diameter (µm)", p25ED])
-        sh.append(["75th Percentile Eye Diameter (µm)", p75ED]); sh.append(["Mean Eye Diameter (µm)", meanED])
-        sh.append(["Standard Deviation Eye Diameter (µm)", stdED])
+    if edema_areas:
+        medEDA,p25EDA,p75EDA,meanEDA,stdEDA = _stats(edema_areas, 'edema_area')
+        sh.append(["Median Edema Area (µm²)", medEDA]); sh.append(["25th Percentile Edema Area (µm²)", p25EDA])
+        sh.append(["75th Percentile Edema Area (µm²)", p75EDA]); sh.append(["Mean Edema Area (µm²)", meanEDA])
+        sh.append(["Standard Deviation Edema Area (µm²)", stdEDA])
+
     sh.append([]); sh.append(["Class Distribution"])
     cls_counts = [0,0,0,0,0]
-    for c in curvatures:
-        idx = 4 if c == 5 else int(c)-1
-        if 0 <= idx < 5:
-            cls_counts[idx] += 1
+    for idx, c in enumerate(curvatures):
+        if not _is_included(idx, 'curvature'):
+            continue
+        i_cls = 4 if c == 5 else int(c)-1
+        if 0 <= i_cls < 5:
+            cls_counts[i_cls] += 1
     labels = ["Class 1","Class 2","Class 3","Class 4","Not Classified"]
     for i,lbl in enumerate(labels):
         sh.append([f"{lbl}", cls_counts[i]])
@@ -247,7 +281,7 @@ def _normalize_mask(mask: np.ndarray) -> np.ndarray:
 GALLERY_MASK_ALPHA = 0.45
 MANUAL_MASK_ALPHA = 0.15
 
-def _make_seg_overlay(original_img, seg_mask, path_points=None, straight_line_points=None, eye_mask=None, mask_alpha=GALLERY_MASK_ALPHA) -> np.ndarray:
+def _make_seg_overlay(original_img, seg_mask, path_points=None, straight_line_points=None, eye_mask=None, edema_mask=None, mask_alpha=GALLERY_MASK_ALPHA) -> np.ndarray:
     base = _to_numpy(original_img); mask = _normalize_mask(seg_mask)
     if base.ndim == 2: base = np.stack([base]*3, axis=-1)
     if mask.shape[:2] != base.shape[:2]:
@@ -268,6 +302,15 @@ def _make_seg_overlay(original_img, seg_mask, path_points=None, straight_line_po
         red[..., 0] = 255
         em = (eye_norm > 0)[..., None].astype(np.float32)
         overlay = overlay * (1 - 0.35 * em) + red * (0.35 * em)
+
+    if edema_mask is not None:
+        edema_norm = _normalize_mask(edema_mask)
+        if edema_norm.shape[:2] != base.shape[:2]:
+            edema_norm = np.array(PILImage.fromarray(edema_norm).resize((base.shape[1], base.shape[0]), resample=PILImage.NEAREST))
+        blue = np.zeros_like(overlay)
+        blue[..., 2] = 255
+        edm = (edema_norm > 0)[..., None].astype(np.float32)
+        overlay = overlay * (1 - 0.4 * edm) + blue * (0.4 * edm)
 
     overlay = overlay.clip(0,255).astype(np.uint8)
 
@@ -312,7 +355,7 @@ def _shorten_name(name: str, max_chars: int = 22) -> str:
     head = keep // 2; tail = keep - head
     return f"{root[:head]}...{root[-tail:]}{ext}"
 
-def _stage_inputs(files: Optional[List[gr.File]], folder_input) -> Tuple[str, list]:
+def _stage_inputs(files: Optional[List[gr.File]], folder_input) -> Tuple[str, list, Optional[str]]:
     """
     Normalize inputs into a working directory with all images inside, and a
     sorted list of filenames (basenames) that match what will be processed.
@@ -320,6 +363,10 @@ def _stage_inputs(files: Optional[List[gr.File]], folder_input) -> Tuple[str, li
       of them into a temp dir and return that dir + filenames.
     - If `folder_input` is a string path to a directory, enumerate it.
     - Otherwise, fall back to `files` (individual uploads) and copy into a temp dir.
+
+    Returns (work_dir, filenames, tmpdir_to_clean): the third element is the temp
+    directory the caller should delete after use, or None when work_dir belongs to
+    the user (Case 2) and must not be removed.
     """
     exts = {'.png', '.jpg', '.jpeg', '.tif', '.tiff', '.bmp'}
 
@@ -354,14 +401,14 @@ def _stage_inputs(files: Optional[List[gr.File]], folder_input) -> Tuple[str, li
                 shutil.copy(p, dst)
                 basenames.append(bn)
             basenames.sort()
-            return tmpdir, basenames
+            return tmpdir, basenames, tmpdir
 
     # Case 2: Folder upload as a single directory path (less common)
     if isinstance(folder_input, str) and os.path.isdir(folder_input):
         names = [n for n in os.listdir(folder_input)
                  if os.path.splitext(n)[1].lower() in exts]
         names.sort()
-        return folder_input, names
+        return folder_input, names, None  # user's own folder — do not delete
 
     # Case 3: Individual files upload (UploadButton)
     tmpdir = tempfile.mkdtemp()
@@ -382,7 +429,7 @@ def _stage_inputs(files: Optional[List[gr.File]], folder_input) -> Tuple[str, li
                 shutil.copy(p, dst)
                 filenames.append(bn)
     filenames.sort()
-    return tmpdir, filenames
+    return tmpdir, filenames, tmpdir
 
 
 def _safe_float(s, default=None):
@@ -614,28 +661,54 @@ def _apply_scalebar_points(sb_points, bar_label_um_str, folder_input, files):
 
 def process(folder,
             files: Optional[List[gr.File]],
-            seg_model_choice="General Model",
+            seg_model_choice="Fast & Easy (256 px)",
             process_curvature=True,
             process_length=True,
             process_ratio=True,
             process_eye_size=True,
+            process_edema=True,
             use_threshold=False,
             threshold_value=0.5,
             physical_horizontal_um_str="",
             physical_vertical_um_str=""):
-    work_dir, filenames = _stage_inputs(files, folder)
+    t0 = time.perf_counter()
+    work_dir, filenames, _tmpdir_to_clean = _stage_inputs(files, folder)
     # Resolve chosen segmentation model
-    seg_filename, seg_encoder, eye_filename = SEG_MODEL_OPTIONS.get(seg_model_choice, SEG_MODEL_OPTIONS["General Model"])
-    # Build kwargs for eye model (use default if eye_filename is None)
-    eye_kwargs = {} if eye_filename is None else {"eye_model_filename": eye_filename}
-    # Always load eyes for overlay visualization
-    original_images, segmented_images, grown_images, eyes_images = segmentation_pipeline(
-        work_dir,
-        include_eyes=True,
-        body_model_filename=seg_filename,
-        body_encoder_name=seg_encoder,
-        **eye_kwargs,
+    seg_filename, seg_encoder, eye_filename, model_target_size, edema_filename = SEG_MODEL_OPTIONS.get(
+        seg_model_choice, SEG_MODEL_OPTIONS["Fast & Easy (256 px)"]
     )
+    # Build kwargs for eye/edema models (use pipeline defaults when filename is None)
+    eye_kwargs = {} if eye_filename is None else {"eye_model_filename": eye_filename}
+    edema_kwargs = {} if edema_filename is None else {"edema_model_filename": edema_filename}
+    # Pass sorted file paths so segmentation results match the sorted filenames list
+    file_paths_sorted = [os.path.join(work_dir, fn) for fn in filenames]
+    # Always load eyes for overlay visualization; load edema if requested
+    try:
+        if process_edema:
+            original_images, segmented_images, grown_images, eyes_images, edema_images = segmentation_pipeline(
+                file_list=file_paths_sorted,
+                target_size=(model_target_size, model_target_size),
+                include_eyes=True,
+                include_edema=True,
+                body_model_filename=seg_filename,
+                body_encoder_name=seg_encoder,
+                **eye_kwargs,
+                **edema_kwargs,
+            )
+        else:
+            original_images, segmented_images, grown_images, eyes_images = segmentation_pipeline(
+                file_list=file_paths_sorted,
+                target_size=(model_target_size, model_target_size),
+                include_eyes=True,
+                include_edema=False,
+                body_model_filename=seg_filename,
+                body_encoder_name=seg_encoder,
+                **eye_kwargs,
+            )
+            edema_images = []
+    finally:
+        if _tmpdir_to_clean:
+            shutil.rmtree(_tmpdir_to_clean, ignore_errors=True)
     model = _ensure_model()
 
     # Parse physical distances (µm) for full image width/height from user
@@ -643,27 +716,28 @@ def process(folder,
     phys_h_um_user = _safe_float(physical_vertical_um_str, default=None)
 
     if phys_w_um_user is not None and phys_h_um_user is not None:
-        y_scale_info = phys_h_um_user / 256
-        x_scale_info = phys_w_um_user / 256
+        y_scale_info = phys_h_um_user / model_target_size
+        x_scale_info = phys_w_um_user / model_target_size
         spacing_info_md = (
             f"**Spacing used:** custom input | "
             f"y = {y_scale_info:.4f} µm/pixel, x = {x_scale_info:.4f} µm/pixel "
-            f"(from H={phys_h_um_user:g} µm, W={phys_w_um_user:g} µm over 256 px)"
+            f"(from H={phys_h_um_user:g} µm, W={phys_w_um_user:g} µm over {model_target_size} px)"
         )
     else:
-        y_scale_info = 5885.0 / 256
-        x_scale_info = 5885.0 / 256
+        y_scale_info = 5885.0 / model_target_size
+        x_scale_info = 5885.0 / model_target_size
         spacing_info_md = (
             f"**Spacing used:** default calibration | "
             f"y = {y_scale_info:.4f} µm/pixel, x = {x_scale_info:.4f} µm/pixel "
-            f"(H=W=5885 µm over 256 px)"
+            f"(H=W=5885 µm over {model_target_size} px)"
         )
 
-    fish_lengths, curvatures, ratios, eye_areas, eye_diameters, previews = [], [], [], [], [], []
+    fish_lengths, curvatures, ratios, eye_areas, edema_areas, previews = [], [], [], [], [], []
     for i, seg_mask in enumerate(segmented_images):
         path_points = None
         straight_line_points = None
         eye_mask_for_vis = eyes_images[i] if i < len(eyes_images) else None
+        edema_mask_for_vis = edema_images[i] if i < len(edema_images) else None
         seg_mask_bin = seg_mask > 0
 
         # Per-image pixel scales derived from user-provided physical distances
@@ -673,12 +747,12 @@ def process(folder,
             phys_w_um = phys_w_um_user
             phys_h_um = phys_h_um_user
             # Calculate spacing for the new function: (dy, dx) in physical units per pixel
-            y_scale = phys_h_um / 256  # physical units per pixel in y direction
-            x_scale = phys_w_um / 256  # physical units per pixel in x direction
+            y_scale = phys_h_um / model_target_size  # physical units per pixel in y direction
+            x_scale = phys_w_um / model_target_size  # physical units per pixel in x direction
         else:
-            # Default spacing (assuming 5885 µm per 256 pixels as per the original code)
-            y_scale = 5885.0 / 256
-            x_scale = 5885.0 / 256
+            # Default spacing (assuming 5885 µm per model_target_size pixels as per the original code)
+            y_scale = 5885.0 / model_target_size
+            x_scale = 5885.0 / model_target_size
             phys_w_um = 5885.0
             phys_h_um = 5885.0
 
@@ -687,7 +761,6 @@ def process(folder,
             try:
                 eye_mask_for_length = (eye_mask_for_vis > 0) if eye_mask_for_vis is not None else None
                 spacing = (y_scale, x_scale)
-                print(f"spacing:{spacing}")
                 # Use eye mask when available to stabilize head-side start point.
                 length, straight_length, path_points, straight_line_points = tube_length_border2border(
                     seg_mask_bin,
@@ -719,11 +792,22 @@ def process(folder,
                     spacing=(y_scale, x_scale),
                 )
                 eye_areas.append(float(eye_info.get("eye_area", 0.0)))
-                eye_diameters.append(float(eye_info.get("eye_diameter", 0.0)))
             except Exception as e:
                 print(f"Error calculating eye metrics for image {i}: {e}")
                 eye_areas.append(None)
-                eye_diameters.append(None)
+
+        if process_edema:
+            try:
+                edema_mask_bin = (edema_mask_for_vis > 0) if edema_mask_for_vis is not None else None
+                edema_info = compute_eye_metrics(
+                    edema_mask_bin,
+                    mask_fish=None,
+                    spacing=(y_scale, x_scale),
+                )
+                edema_areas.append(float(edema_info.get("eye_area", 0.0)))
+            except Exception as e:
+                print(f"Error calculating edema area for image {i}: {e}")
+                edema_areas.append(None)
 
         if process_curvature:
             try:
@@ -739,6 +823,7 @@ def process(folder,
                 path_points=path_points,
                 straight_line_points=straight_line_points,
                 eye_mask=eye_mask_for_vis,
+                edema_mask=edema_mask_for_vis,
             )
             original_name = filenames[i] if i < len(filenames) else f"image_{i}"
             short = _shorten_name(original_name, max_chars=22)
@@ -748,7 +833,7 @@ def process(folder,
         except Exception:
             pass
 
-    boxplot_png = _make_boxplots_image(fish_lengths, curvatures, ratios, eye_areas, eye_diameters)
+    boxplot_png = _make_boxplots_image(fish_lengths, curvatures, ratios, eye_areas, edema_areas)
     boxplot_np = np.array(PILImage.open(io.BytesIO(boxplot_png)))
     # Prepare state for interactive filtering
     # Keep a copy of the original previews so crosses can be added/removed reversibly
@@ -765,7 +850,7 @@ def process(folder,
         'curvatures': curvatures,
         'ratios': ratios,
         'eye_areas': eye_areas,
-        'eye_diameters': eye_diameters,
+        'edema_areas': edema_areas,
         'boxplot_png': boxplot_png,
         'threshold_used': use_threshold,
         'threshold_value': threshold_value,
@@ -774,14 +859,18 @@ def process(folder,
         'original_images': original_images,
         'segmented_images': segmented_images,
         'eyes_images': eyes_images,
+        'edema_images': edema_images,
         'spacing': (y_scale, x_scale),
         'manual_points': {},
+        'exclusions': {},
     }
     shown_names = [_shorten_name(n, max_chars=22) for n in filenames[:5]]
     more_note = f" … and {len(filenames) - 5} more" if len(filenames) > 5 else ""
     filenames_md = "**Uploaded:** " + ", ".join(shown_names) + more_note
-    
-    return boxplot_np, previews, filenames_md, data_state, spacing_info_md
+    elapsed = time.perf_counter() - t0
+    n_imgs = len(filenames)
+    print(f"[PROCESS TIMING] {seg_model_choice}: {elapsed:.2f}s ({n_imgs} images)")
+    return boxplot_np, previews, filenames_md, data_state, spacing_info_md + f"\n\n⏱ **{seg_model_choice} processing time:** {elapsed:.2f} s ({n_imgs} image{'s' if n_imgs != 1 else ''})"
 
 def summarize_files(files):
     if not files: return "No files uploaded."
@@ -791,8 +880,7 @@ def summarize_files(files):
     return "**Uploaded:** " + ", ".join(short) + more
 
 
-def _generate_corrected_excel(data):
-    """Generate a fresh Excel export from the current in-memory results, including manual corrections."""
+def _generate_corrected_excel(data, sheet_name="Fish Data"):
     if not data:
         return None
 
@@ -802,13 +890,15 @@ def _generate_corrected_excel(data):
         data.get('curvatures', []),
         data.get('ratios', []),
         data.get('eye_areas', []),
-        data.get('eye_diameters', []),
+        data.get('edema_areas', []),
         data.get('threshold_used', False),
         data.get('threshold_value', 0.0),
         data.get('boxplot_png', None),
+        sheet_name=sheet_name,
+        exclusions=data.get('exclusions', {}),
     )
-    tmpout = tempfile.mkdtemp()
-    out_xlsx = os.path.join(tmpout, "fish_data_corrected.xlsx")
+    fd, out_xlsx = tempfile.mkstemp(suffix='.xlsx', prefix='fish_data_')
+    os.close(fd)
     with open(out_xlsx, "wb") as f:
         f.write(out_bytes.getvalue())
     return out_xlsx
@@ -980,12 +1070,14 @@ def _apply_manual_points(edit_idx, manual_points_temp, data):
         
         # Regenerate preview for this image
         eye_mask = data.get('eyes_images', [None]*(edit_idx+1))[edit_idx] if edit_idx < len(data.get('eyes_images', [])) else None
+        edema_mask = data.get('edema_images', [None]*(edit_idx+1))[edit_idx] if edit_idx < len(data.get('edema_images', [])) else None
         new_overlay_gallery = _make_seg_overlay(
             original_img,
             seg_mask,
             path_points=path,
             straight_line_points=straight_line_points,
             eye_mask=eye_mask,
+            edema_mask=edema_mask,
             mask_alpha=GALLERY_MASK_ALPHA,
         )
 
@@ -995,6 +1087,7 @@ def _apply_manual_points(edit_idx, manual_points_temp, data):
             path_points=path,
             straight_line_points=straight_line_points,
             eye_mask=eye_mask,
+            edema_mask=edema_mask,
             mask_alpha=MANUAL_MASK_ALPHA,
         )
         
@@ -1025,7 +1118,7 @@ def _apply_manual_points(edit_idx, manual_points_temp, data):
             data.get('curvatures', []),
             data.get('ratios', []),
             data.get('eye_areas', []),
-            data.get('eye_diameters', []),
+            data.get('edema_areas', []),
         )
         boxplot_np = np.array(PILImage.open(io.BytesIO(boxplot_png)))
         data['boxplot_png'] = boxplot_png
@@ -1059,7 +1152,7 @@ with gr.Blocks() as demo:
         )
         model_choice = gr.Radio(
             choices=list(SEG_MODEL_OPTIONS.keys()),
-            value="General Model",
+            value="Fast & Easy (256 px)",
             label="Model",
         )
 
@@ -1143,6 +1236,7 @@ with gr.Blocks() as demo:
         chk_len  = gr.Checkbox(value=True, label="Process Length")
         chk_ratio = gr.Checkbox(value=True, label="Process Length/Straight Line Ratio")
         chk_eye = gr.Checkbox(value=True, label="Process Eye Size")
+        chk_edema = gr.Checkbox(value=True, label="Process Edema")
         chk_thr  = gr.Checkbox(value=False, label="Use Threshold", visible=False)
         thr_val  = gr.Slider(0.0, 1.0, value=0.5, step=0.05, label="Threshold Value", visible=False)
 
@@ -1198,16 +1292,74 @@ with gr.Blocks() as demo:
             If you adjusted manual points, this export will include the updated length and ratio values.
             """)
 
+            with gr.Group():
+                gr.Markdown("### Exclude Measurements for This Image")
+                gr.Markdown(
+                    "Uncheck any metric you want to mark as **Excluded** in the final Excel "
+                    "(the row will still appear but the cell will say *Excluded* and it won't "
+                    "count toward statistics)."
+                )
+                with gr.Row():
+                    excl_length = gr.Checkbox(value=True, label="Fish Length")
+                    excl_curv   = gr.Checkbox(value=True, label="Curvature")
+                    excl_ratio  = gr.Checkbox(value=True, label="Ratio")
+                    excl_eye    = gr.Checkbox(value=True, label="Eye Area")
+                    excl_edema  = gr.Checkbox(value=True, label="Edema Area")
+                with gr.Row():
+                    save_excl_btn = gr.Button("Save Exclusions for This Image", variant="primary")
+                excl_status = gr.Markdown("")
+
+            with gr.Row():
+                excel_sheet_name = gr.Textbox(
+                    label="Sheet name",
+                    value="Fish Data",
+                    placeholder="Fish Data",
+                    max_lines=1,
+                )
+
             with gr.Row():
                 gen_corrected_btn = gr.Button("Generate Final Excel", variant="primary")
 
             with gr.Row():
                 out_file_corrected = gr.File(label="Download final results (.xlsx)")
 
+    def _load_exclusions_for_image(evt: gr.SelectData, data):
+        idx = evt.index
+        if data is None or idx < 0:
+            return True, True, True, True, True
+        excl = data.get('exclusions', {}).get(idx, {})
+        return (
+            excl.get('fish_length', True),
+            excl.get('curvature',   True),
+            excl.get('ratio',       True),
+            excl.get('eye_area',    True),
+            excl.get('edema_area',  True),
+        )
+
+    def _save_exclusions(edit_idx, inc_length, inc_curv, inc_ratio, inc_eye, inc_edema, data):
+        if data is None or edit_idx < 0:
+            return data, "No image selected."
+        if 'exclusions' not in data:
+            data['exclusions'] = {}
+        data['exclusions'][edit_idx] = {
+            'fish_length': inc_length,
+            'curvature':   inc_curv,
+            'ratio':       inc_ratio,
+            'eye_area':    inc_eye,
+            'edema_area':  inc_edema,
+        }
+        fname = (data['filenames'][edit_idx]
+                 if edit_idx < len(data.get('filenames', []))
+                 else f"Image {edit_idx}")
+        excluded = [k for k, v in data['exclusions'][edit_idx].items() if not v]
+        msg = (f"**{fname}** — excluded: {', '.join(excluded)}"
+               if excluded else f"**{fname}** — all metrics included.")
+        return data, msg
+
     # Use files from state, not a giant Files list
     run.click(
         fn=process,
-        inputs=[folder, files_state, model_choice, chk_curv, chk_len, chk_ratio, chk_eye, chk_thr, thr_val, phys_w_um, phys_h_um],
+        inputs=[folder, files_state, model_choice, chk_curv, chk_len, chk_ratio, chk_eye, chk_edema, chk_thr, thr_val, phys_w_um, phys_h_um],
         outputs=[out_box, gallery, filenames_list, data_state, spacing_used_md]
     )
 
@@ -1322,9 +1474,23 @@ with gr.Blocks() as demo:
         outputs=[manual_edit_image, edit_image_idx, manual_edit_instructions]
     )
 
+    # Load exclusion checkboxes when gallery image is selected
+    gallery.select(
+        fn=_load_exclusions_for_image,
+        inputs=[data_state],
+        outputs=[excl_length, excl_curv, excl_ratio, excl_eye, excl_edema],
+    )
+
+    # Save exclusions for current image
+    save_excl_btn.click(
+        fn=_save_exclusions,
+        inputs=[edit_image_idx, excl_length, excl_curv, excl_ratio, excl_eye, excl_edema, data_state],
+        outputs=[data_state, excl_status],
+    )
+
     gen_corrected_btn.click(
         fn=_generate_corrected_excel,
-        inputs=[data_state],
+        inputs=[data_state, excel_sheet_name],
         outputs=[out_file_corrected]
     )
     
