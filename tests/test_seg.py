@@ -126,14 +126,13 @@ def test_segmentation_pipeline_include_eyes_returns_four_tuple(tmp_path):
 def test_segmentation_pipeline_model_load_failure_raises(tmp_path):
     """RuntimeError is raised when the body model cannot be loaded."""
     import cv2
+    import zebrafish_analysis.core.seg as seg_mod
 
     cv2.imwrite(str(tmp_path / "fish.png"), np.zeros((64, 64, 3), dtype=np.uint8))
 
-    with patch("zebrafish_analysis.core.seg.hf_hub_download", side_effect=Exception("network error")), \
-         patch("zebrafish_analysis.core.seg.Unet") as mock_unet:
-
-        mock_unet.return_value = MagicMock()
-
+    # Patch _load_unet_model directly — logic.py may have monkey-patched it at import
+    # time, so patching hf_hub_download would be bypassed by the caching wrapper.
+    with patch.object(seg_mod, "_load_unet_model", return_value=None):
         from zebrafish_analysis.core.seg import segmentation_pipeline
         with pytest.raises(RuntimeError):
             segmentation_pipeline(
