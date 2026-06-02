@@ -9,6 +9,21 @@ app_file: app.py
 pinned: false
 ---
 
+## Project Structure
+
+```
+zebrafish_analysis/
+├── core/          — shared analysis package (seg, length, scalebar, models)
+├── webapp/        — Gradio frontend
+└── slicer_extension/ZebrafishAnalysis/  — 3D Slicer extension
+```
+
+## Running the Slicer extension
+
+Install 3D Slicer 5.x, open Extension Wizard, point to
+`zebrafish_analysis/slicer_extension/ZebrafishAnalysis/`.
+Dependencies are installed automatically on first load.
+
 # 🐟 Zebrafish Segmentation Web App
 
 ## Table of Contents

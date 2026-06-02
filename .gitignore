@@ -1,2 +1,9 @@
 runs
 *.pth
+__pycache__/
+*.pyc
+*.pyo
+.gradio/
+
+CLAUDE.md
+notes_jona.md
