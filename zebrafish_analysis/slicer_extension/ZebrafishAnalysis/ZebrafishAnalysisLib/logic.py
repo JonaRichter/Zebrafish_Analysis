@@ -128,7 +128,7 @@ def analyse_images(image_paths: list, params: dict,
     Parameters
     ----------
     image_paths : list[str]
-        Absolute paths to input images. Must be sorted before calling.
+        Absolute paths to input images.
     params : dict
         Keys:
           length, curvature, ratio, eyes : bool
