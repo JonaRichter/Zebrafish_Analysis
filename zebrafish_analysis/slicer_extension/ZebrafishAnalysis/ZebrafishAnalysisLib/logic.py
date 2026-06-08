@@ -57,6 +57,7 @@ def preload_models(params: dict) -> None:
     body_filename = params.get("body_model_filename", "best_model_body_3400_vgg19.pth")
     body_encoder  = params.get("body_encoder_name",   "vgg19")
     _cached_load_unet(
+        model_path=params.get("body_model_path"),
         repo_id="markdanielarndt/Zebrafish_Segmentation",
         filename=body_filename, label="body model",
         revision="main", force_download=False, encoder_name=body_encoder,
@@ -65,6 +66,7 @@ def preload_models(params: dict) -> None:
     if params.get("eyes", False):
         eye_filename = params.get("eye_model_filename", "best_model_eye_3400.pth")
         _cached_load_unet(
+            model_path=params.get("eye_model_path"),
             repo_id="markdanielarndt/Zebrafish_Segmentation",
             filename=eye_filename, label="eye model",
             revision="main", force_download=False, encoder_name="vgg16",

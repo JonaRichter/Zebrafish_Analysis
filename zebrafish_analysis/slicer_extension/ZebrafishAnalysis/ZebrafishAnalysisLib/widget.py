@@ -410,12 +410,14 @@ class ZebrafishAnalysisMainWidget:
         Skip if models are not yet in local cache — the download dialog will
         run first, and importing huggingface_hub from two threads concurrently
         causes circular-import errors in Slicer's Python environment.
+
+        Returns the Thread if started, None if skipped.
         """
         import threading
         from logic import preload_models
         model_data = self._model_combo.currentData
         if not model_data:
-            return
+            return None
         body_file, body_enc, eye_file = model_data
         include_eyes = self._chk_eyes.isChecked()
 
@@ -424,7 +426,7 @@ class ZebrafishAnalysisMainWidget:
         if include_eyes and eye_file:
             files_needed.append(eye_file)
         if not all(os.path.exists(_local_model_path(f)) for f in files_needed):
-            return  # download not done yet — skip preload, avoid concurrent HF import
+            return None  # download not done yet — skip preload, avoid concurrent HF import
 
         params = {
             "curvature":           True,  # always preload curvature
@@ -436,7 +438,9 @@ class ZebrafishAnalysisMainWidget:
         }
         if include_eyes and eye_file:
             params["eye_model_path"] = _local_model_path(eye_file)
-        threading.Thread(target=preload_models, args=(params,), daemon=True).start()
+        t = threading.Thread(target=preload_models, args=(params,), daemon=True)
+        t.start()
+        return t
 
     @staticmethod
     def _models_to_download(body_filename, eye_filename, include_eyes):
@@ -493,9 +497,10 @@ class ZebrafishAnalysisMainWidget:
         dlg = qt.QProgressDialog(
             f"Downloading models (first run only)\n{missing[0][2]}…",
             "Cancel",
-            0, 0,  # 0,0 = indeterminate pulsing until we have byte data
+            0, 1,  # 0/1 = empty bar; switched to 0/100 once we have byte count
             slicer.util.mainWindow(),
         )
+        dlg.setValue(0)
         dlg.setWindowTitle("Downloading Models")
         dlg.setWindowModality(qt.Qt.ApplicationModal)
         dlg.setMinimumWidth(420)
@@ -659,10 +664,48 @@ class ZebrafishAnalysisMainWidget:
         n = len(self._image_paths)
         import time as _time
 
-        self._run_progress.setRange(0, n)
-        self._run_progress.setValue(0)
+        # Marquee: fixed-width chunk slides left→right via stylesheet margins.
+        # Value pinned at 100 so the chunk always fills the bar; margins clip it
+        # to ~25% width.  Text stays visible (indeterminate mode hides it on macOS).
+        _mrq_chunk = (
+            "QProgressBar{font-weight:bold;border-radius:3px;border:none;"
+            "background:#3a3a3a;color:white;text-align:center;min-height:28px;}"
+            "QProgressBar::chunk{background:#2e7d32;border-radius:2px;"
+            "margin-left:%dpx;margin-right:%dpx;}"
+        )
+        _mrq_base = (
+            "QProgressBar{font-weight:bold;border-radius:3px;border:none;"
+            "background:#3a3a3a;color:white;text-align:center;min-height:28px;}"
+            "QProgressBar::chunk{background:#2e7d32;border-radius:2px;}"
+        )
+        self._run_progress.setRange(0, 100)
+        self._run_progress.setValue(100)
         self._run_progress.setFormat("Loading models…")
         self._run_stack.setCurrentIndex(1)
+        slicer.app.processEvents()
+
+        _mrq_t0 = _time.time()
+        preload_t = self._start_preload()
+        # Run until preload done AND at least 0.5 s elapsed so animation is
+        # always visible, even when models were already in RAM.
+        while True:
+            _mrq_elapsed = _time.time() - _mrq_t0
+            if _mrq_elapsed >= 0.5 and (preload_t is None or not preload_t.is_alive()):
+                break
+            slicer.app.processEvents()
+            _time.sleep(0.05)
+            bar_w = max(self._run_progress.width, 100)
+            chunk_px = bar_w // 4
+            # pos_px: -chunk_px (fully off left) → bar_w (fully off right), then wraps
+            total_range = bar_w + chunk_px
+            pos_px = int(_mrq_elapsed * (total_range / 2.5) % total_range) - chunk_px
+            left_px = max(0, pos_px)
+            right_px = max(0, bar_w - pos_px - chunk_px)
+            self._run_progress.setStyleSheet(_mrq_chunk % (left_px, right_px))
+        self._run_progress.setStyleSheet(_mrq_base)
+
+        self._run_progress.setRange(0, n)
+        self._run_progress.setValue(0)
         slicer.app.processEvents()
 
         _t0 = _time.time()
