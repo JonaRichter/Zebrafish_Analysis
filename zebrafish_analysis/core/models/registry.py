@@ -1,3 +1,12 @@
+# NOTE: This registry is currently used by tests only (tests/test_registry.py).
+# Production code (webapp/app.py, slicer_extension/logic.py) uses its own model
+# configuration directly. The metadata below may be stale — do not rely on it
+# for production model loading without verification.
+#
+# Known stale entries (as of 2026-06-08):
+#   curvature_classifier: repo should be markdanielarndt/Classification,
+#                         filename should be best_model_class.pth
+#   eye_segmentation: encoder should be vgg16, not vgg19
 MODEL_REGISTRY = {
     "segmentation_vgg19": {
         "repo":     "markdanielarndt/Zebrafish_Segmentation",

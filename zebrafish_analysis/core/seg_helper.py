@@ -16,7 +16,7 @@ def load_images_from_path(path):
     """
     images = []
     for file_name in os.listdir(path):
-        if file_name.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff', 'tif')):
+        if file_name.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif')):
             file_path = os.path.join(path, file_name)
             try:
                 #img = Image.open(file_path)

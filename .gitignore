@@ -8,3 +8,5 @@ __pycache__/
 CLAUDE.md
 notes_jona.md
 docs/
+.DS_Store
+.claude/

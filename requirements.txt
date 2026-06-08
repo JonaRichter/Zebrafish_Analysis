@@ -11,4 +11,4 @@ matplotlib
 openpyxl
 scikit-image
 scipy
-
+huggingface_hub
