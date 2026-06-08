@@ -320,7 +320,7 @@ class ZebrafishAnalysisMainWidget:
     def _start_preload(self):
         """Kick off background model preload so Run Analysis starts instantly."""
         import threading
-        from .logic import preload_models
+        from logic import preload_models
         model_data = self._model_combo.currentData
         if not model_data:
             return
@@ -335,7 +335,7 @@ class ZebrafishAnalysisMainWidget:
         threading.Thread(target=preload_models, args=(params,), daemon=True).start()
 
     def _on_detect_scale(self):
-        from .logic import detect_scalebar
+        from logic import detect_scalebar
         if not self._image_paths:
             self._scale_status.setText("Load images first.")
             return
@@ -370,7 +370,7 @@ class ZebrafishAnalysisMainWidget:
             self._tabs.setCurrentIndex(1)
 
     def _on_apply_scale(self):
-        from .logic import detect_scalebar
+        from logic import detect_scalebar
         text = self._bar_um_edit.text.strip()
         if not text or not self._image_paths:
             return
@@ -387,7 +387,7 @@ class ZebrafishAnalysisMainWidget:
             )
 
     def _on_run(self):
-        from .logic import analyse_images
+        from logic import analyse_images
 
         if not self._image_paths:
             slicer.util.warningDisplay("No images loaded.")
