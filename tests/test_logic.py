@@ -88,3 +88,13 @@ def test_analyse_images_error_per_image_does_not_crash(tmp_path, synthetic_fish_
 
     assert len(results) == 1
     assert results[0]["length"] is None
+
+
+@pytest.mark.skip(reason="widget.py requires Slicer runtime — verify manually in Slicer")
+def test_models_to_download_all_cached():
+    pass
+
+
+@pytest.mark.skip(reason="widget.py requires Slicer runtime — verify manually in Slicer")
+def test_models_to_download_missing():
+    pass
