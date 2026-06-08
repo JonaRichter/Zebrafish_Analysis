@@ -25,6 +25,93 @@ import ctk
 import slicer
 
 
+_ZEBRAFISH_MODEL_CACHE = os.path.join(os.path.expanduser("~"), ".cache", "zebrafish_models")
+
+
+def _local_model_path(filename):
+    return os.path.join(_ZEBRAFISH_MODEL_CACHE, filename)
+
+
+def _run_downloads(models_with_urls, hf_headers, progress_state, cancel_event):
+    """
+    Stream-download each (url, filename, label) to _ZEBRAFISH_MODEL_CACHE.
+    URLs and headers are pre-resolved in the main thread to avoid huggingface_hub
+    circular-import issues when imported from a background thread.
+    """
+    # Pre-initialize huggingface_hub here (background thread, no concurrency risk).
+    # segmentation_models_pytorch imports it at module level; if it hasn't been
+    # initialized yet when analyse_images runs in the main thread, Slicer's
+    # broken lazy-loader causes an ImportError.  Doing it here ensures
+    # sys.modules['huggingface_hub'] is fully populated before analyse_images fires.
+    try:
+        import huggingface_hub as _hf  # noqa: F401
+    except Exception:
+        pass
+
+    import requests
+
+    os.makedirs(_ZEBRAFISH_MODEL_CACHE, exist_ok=True)
+    tmp_path = None
+
+    try:
+        for url, filename, label in models_with_urls:
+            if cancel_event.is_set():
+                progress_state["cancelled"] = True
+                return
+
+            progress_state["label"] = label
+            progress_state["done"] = 0
+            progress_state["total"] = 0
+
+            local_path = _local_model_path(filename)
+            tmp_path = local_path + ".tmp"
+
+            # HEAD request to get Content-Length before streaming starts.
+            try:
+                head = requests.head(url, headers=hf_headers,
+                                     allow_redirects=True, timeout=15)
+                total = int(head.headers.get("content-length", 0))
+                if total:
+                    progress_state["total"] = total
+            except Exception:
+                pass
+
+            resp = requests.get(url, headers=hf_headers,
+                                stream=True, allow_redirects=True, timeout=60)
+            resp.raise_for_status()
+
+            if not progress_state["total"]:
+                total = int(resp.headers.get("content-length", 0))
+                if total:
+                    progress_state["total"] = total
+
+            downloaded = 0
+            with open(tmp_path, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=64 * 1024):
+                    if cancel_event.is_set():
+                        progress_state["cancelled"] = True
+                        try:
+                            os.unlink(tmp_path)
+                        except OSError:
+                            pass
+                        return
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        progress_state["done"] = downloaded
+
+            os.replace(tmp_path, local_path)
+            tmp_path = None
+
+        progress_state["done_flag"] = True
+    except Exception as exc:
+        progress_state["error"] = str(exc)
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+
 
 class ZebrafishAnalysisMainWidget:
     def __init__(self, parent_layout):
@@ -318,21 +405,177 @@ class ZebrafishAnalysisMainWidget:
         self._start_preload()  # kick off model load in background while user reviews images
 
     def _start_preload(self):
-        """Kick off background model preload so Run Analysis starts instantly."""
+        """Kick off background model preload so Run Analysis starts instantly.
+
+        Skip if models are not yet in local cache — the download dialog will
+        run first, and importing huggingface_hub from two threads concurrently
+        causes circular-import errors in Slicer's Python environment.
+        """
         import threading
         from logic import preload_models
         model_data = self._model_combo.currentData
         if not model_data:
             return
         body_file, body_enc, eye_file = model_data
+        include_eyes = self._chk_eyes.isChecked()
+
+        # Only preload if all required models are already locally cached.
+        files_needed = [body_file]
+        if include_eyes and eye_file:
+            files_needed.append(eye_file)
+        if not all(os.path.exists(_local_model_path(f)) for f in files_needed):
+            return  # download not done yet — skip preload, avoid concurrent HF import
+
         params = {
             "curvature":           True,  # always preload curvature
-            "eyes":                self._chk_eyes.isChecked(),
+            "eyes":                include_eyes,
             "body_model_filename": body_file,
             "body_encoder_name":   body_enc,
             "eye_model_filename":  eye_file,
+            "body_model_path":     _local_model_path(body_file),
         }
+        if include_eyes and eye_file:
+            params["eye_model_path"] = _local_model_path(eye_file)
         threading.Thread(target=preload_models, args=(params,), daemon=True).start()
+
+    @staticmethod
+    def _models_to_download(body_filename, eye_filename, include_eyes):
+        """Return list of (repo_id, filename, label) not yet in local zebrafish cache."""
+        REPO = "markdanielarndt/Zebrafish_Segmentation"
+        candidates = [(REPO, body_filename, "body segmentation model")]
+        if include_eyes and eye_filename:
+            candidates.append((REPO, eye_filename, "eye segmentation model"))
+        return [
+            (repo_id, fn, label)
+            for repo_id, fn, label in candidates
+            if not os.path.exists(_local_model_path(fn))
+        ]
+
+    def _check_and_download_models(self, params):
+        """
+        Check local model cache. If any required models are missing, show a
+        QProgressDialog and stream-download them in a background thread.
+
+        On return, injects body_model_path / eye_model_path into params so
+        logic.py loads from local file instead of re-downloading.
+
+        Returns True when all models are ready, False if the user cancelled.
+        """
+        import threading
+        import time as _time
+
+        body_file    = params.get("body_model_filename", "best_model_body_3400_vgg19.pth")
+        eye_file     = params.get("eye_model_filename")
+        include_eyes = params.get("eyes", False)
+
+        missing = self._models_to_download(body_file, eye_file, include_eyes)
+        if not missing:
+            # Already cached — inject local paths so logic skips HF download.
+            params["body_model_path"] = _local_model_path(body_file)
+            if include_eyes and eye_file:
+                params["eye_model_path"] = _local_model_path(eye_file)
+            return True
+
+        # Build URLs without importing huggingface_hub — importing it in the main
+        # thread leaves it partially initialised, breaking segmentation_models_pytorch's
+        # subsequent import of it when analyse_images runs.  HF's public URL scheme is
+        # stable; no auth needed for the public markdanielarndt repos.
+        models_with_urls = [
+            (f"https://huggingface.co/{repo_id}/resolve/main/{fn}", fn, label)
+            for repo_id, fn, label in missing
+        ]
+        hf_headers = {}
+
+        progress_state = {"done": 0, "total": 0, "label": missing[0][2],
+                          "done_flag": False, "cancelled": False, "error": None}
+        cancel_event = threading.Event()
+
+        dlg = qt.QProgressDialog(
+            f"Downloading models (first run only)\n{missing[0][2]}…",
+            "Cancel",
+            0, 0,  # 0,0 = indeterminate pulsing until we have byte data
+            slicer.util.mainWindow(),
+        )
+        dlg.setWindowTitle("Downloading Models")
+        dlg.setWindowModality(qt.Qt.ApplicationModal)
+        dlg.setMinimumWidth(420)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        dlg.show()
+        slicer.app.processEvents()
+
+        thread = threading.Thread(
+            target=_run_downloads,
+            args=(models_with_urls, hf_headers, progress_state, cancel_event),
+            daemon=True,
+        )
+        thread.start()
+        t0 = _time.time()
+        _determinate = False  # track whether we've switched to percentage mode
+
+        while thread.is_alive() and not progress_state["done_flag"] and not progress_state["cancelled"]:
+            if dlg.wasCanceled:
+                cancel_event.set()
+                progress_state["cancelled"] = True
+                break
+
+            done  = progress_state.get("done", 0)
+            total = progress_state.get("total", 0)
+            label = progress_state.get("label", "")
+            elapsed = _time.time() - t0
+
+            if total > 0:
+                if not _determinate:
+                    dlg.setRange(0, 100)  # switch from pulsing to percentage
+                    _determinate = True
+                pct = int(done / total * 100)
+                dlg.setValue(pct)
+                if pct > 2 and elapsed > 0:
+                    eta_s = elapsed / pct * (100 - pct)
+                    if eta_s >= 60:
+                        eta_str = f"~{int(eta_s // 60)}m {int(eta_s % 60):02d}s left"
+                    else:
+                        eta_str = f"~{int(eta_s)}s left"
+                    dlg.setLabelText(
+                        f"Downloading models (first run only)\n{label}  {pct}%  ·  {eta_str}"
+                    )
+                else:
+                    dlg.setLabelText(
+                        f"Downloading models (first run only)\n{label}  {pct}%"
+                    )
+            elif done > 0:
+                mb = done / 1024 / 1024
+                dlg.setLabelText(
+                    f"Downloading models (first run only)\n{label}  "
+                    f"{mb:.1f} MB  ·  {int(elapsed)}s elapsed…"
+                )
+            else:
+                dlg.setLabelText(
+                    f"Downloading models (first run only)\n{label}  "
+                    f"{int(elapsed)}s elapsed…"
+                )
+
+            slicer.app.processEvents()
+            _time.sleep(0.2)
+
+        thread.join(timeout=2.0)
+        dlg.close()
+
+        if progress_state.get("cancelled"):
+            return False
+
+        if progress_state.get("error"):
+            slicer.util.errorDisplay(
+                f"Model download failed:\n{progress_state['error']}\n\n"
+                "Check your internet connection and try again."
+            )
+            return False
+
+        # Inject local paths so logic.py loads from disk, skips HF download.
+        params["body_model_path"] = _local_model_path(body_file)
+        if include_eyes and eye_file:
+            params["eye_model_path"] = _local_model_path(eye_file)
+        return True
 
     def _on_detect_scale(self):
         from logic import detect_scalebar
@@ -408,6 +651,10 @@ class ZebrafishAnalysisMainWidget:
             "body_encoder_name":   body_enc,
             "eye_model_filename":  eye_file,
         }
+
+        # Download any missing models before starting analysis.
+        if not self._check_and_download_models(params):
+            return  # user cancelled or download failed
 
         n = len(self._image_paths)
         import time as _time

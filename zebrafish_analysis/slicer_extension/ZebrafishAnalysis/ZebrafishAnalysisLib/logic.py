@@ -183,8 +183,12 @@ def analyse_images(image_paths: list, params: dict,
         body_encoder_name=body_encoder,
         body_force_download=force_download,
     )
+    if params.get("body_model_path"):
+        _seg_kwargs["body_model_path"] = params["body_model_path"]
     if include_eyes and eye_filename:
         _seg_kwargs["eye_model_filename"] = eye_filename
+    if params.get("eye_model_path"):
+        _seg_kwargs["eye_model_path"] = params["eye_model_path"]
 
     n = len(image_paths)
     results = []
