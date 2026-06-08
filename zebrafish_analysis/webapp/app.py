@@ -904,34 +904,6 @@ def _generate_corrected_excel(data, sheet_name="Fish Data"):
     return out_xlsx
 
 
-def _enter_manual_mode(evt: gr.SelectData, data):
-    """Enter manual editing mode for selected image"""
-    if data is None:
-        return None, -1, "No data available", gr.update(visible=False)
-    
-    idx = evt.index
-    if idx < 0 or idx >= len(data.get('original_images', [])):
-        return None, -1, "Invalid image selection", gr.update(visible=False)
-    
-    # Get the original image for display
-    original_img = data['original_images'][idx]
-    seg_mask = data['segmented_images'][idx]
-    
-    # Create a composite showing original + segmentation overlay
-    display_img = _make_seg_overlay(
-        original_img,
-        seg_mask,
-        path_points=None,
-        straight_line_points=None,
-        mask_alpha=MANUAL_MASK_ALPHA,
-    )
-    
-    filename = data['filenames'][idx] if idx < len(data['filenames']) else f"Image {idx}"
-    instructions = f"**Editing: {filename}**\n\nClick on the image to set points:\n1. First click = HEAD (start point)\n2. Second click = TAIL (end point)\n\nAfter setting both points, click 'Apply Manual Points' to recalculate length."
-    
-    return display_img, idx, instructions, gr.update(visible=True)
-
-
 def _record_manual_click(evt: gr.SelectData, current_img, edit_idx, manual_points_temp):
     """Record a click on the image for manual point selection"""
     if current_img is None or edit_idx < 0:
