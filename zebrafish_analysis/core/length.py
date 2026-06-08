@@ -1,11 +1,7 @@
+import os
 import numpy as np
 import cv2
-import os
-from segmentation_models_pytorch import Unet
 import torch
-import os
-import numpy as np
-import cv2
 import matplotlib.pyplot as plt
 from skimage import measure
 from scipy.ndimage import binary_erosion, convolve, distance_transform_edt
