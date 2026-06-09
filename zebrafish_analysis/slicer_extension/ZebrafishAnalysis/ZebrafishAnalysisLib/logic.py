@@ -25,7 +25,14 @@ def _install_model_cache():
         return
     import numpy as np  # noqa: F401 — must precede torch to enable numpy bridge
     import zebrafish_analysis.core.seg as _seg_module
-    _original_load_unet = _seg_module._load_unet_model
+    # On Slicer module reload, logic.py globals reset but seg._load_unet_model
+    # still holds the wrapper from the old instance → would recurse infinitely.
+    # Stash the true original on seg so it survives logic.py reloads.
+    if hasattr(_seg_module, "_load_unet_model_original"):
+        _original_load_unet = _seg_module._load_unet_model_original
+    else:
+        _original_load_unet = _seg_module._load_unet_model
+        _seg_module._load_unet_model_original = _original_load_unet
     _seg_module._load_unet_model = _cached_load_unet
 
 
