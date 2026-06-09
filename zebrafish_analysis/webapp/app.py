@@ -2,7 +2,7 @@ import gradio as gr
 import tempfile, os, shutil
 from typing import List, Optional, Tuple
 from zebrafish_analysis.core.seg import segmentation_pipeline
-from zebrafish_analysis.core.length import load_model, classification_curvature, tube_length_border2border, compute_eye_metrics
+from zebrafish_analysis.core.length import load_model, classification_curvature, tube_length_border2border, compute_eye_metrics, compute_eye_diameters
 from zebrafish_analysis.core.manual import compute_manual_length as _compute_manual_length
 import openpyxl, io
 from openpyxl.drawing.image import Image as ExcelImage
@@ -152,6 +152,8 @@ def write_lengths_to_excel_bytes(
     boxplot_png_bytes,
     sheet_name: str = "Fish Data",
     exclusions=None,
+    eye_widths=None,
+    eye_heights=None,
 ):
     EXCLUDED = "Excluded"
     exclusions = exclusions or {}
@@ -169,6 +171,8 @@ def write_lengths_to_excel_bytes(
     if ratios: header.append("Length/Straight Line Ratio")
     if eye_areas: header.append("Eye Area (µm²)")
     if edema_areas: header.append("Edema Area (µm²)")
+    if eye_widths: header.append("Eye Width / Horizontal Ø (µm)")
+    if eye_heights: header.append("Eye Height / Vertical Ø (µm)")
     sh.append(header)
 
     for i, fname in enumerate(filenames):
@@ -190,6 +194,12 @@ def write_lengths_to_excel_bytes(
         if edema_areas:
             eda = edema_areas[i] if i < len(edema_areas) and edema_areas[i] is not None else "N/A"
             row.append(eda if _is_included(i, 'edema_area') else EXCLUDED)
+        if eye_widths:
+            ew = eye_widths[i] if i < len(eye_widths) and eye_widths[i] is not None else "N/A"
+            row.append(ew if _is_included(i, 'eye_area') else EXCLUDED)
+        if eye_heights:
+            eh = eye_heights[i] if i < len(eye_heights) and eye_heights[i] is not None else "N/A"
+            row.append(eh if _is_included(i, 'eye_area') else EXCLUDED)
         sh.append(row)
 
     def _stats(vals, metric_key):
@@ -252,6 +262,18 @@ def write_lengths_to_excel_bytes(
         sh.append(["Median Edema Area (µm²)", medEDA]); sh.append(["25th Percentile Edema Area (µm²)", p25EDA])
         sh.append(["75th Percentile Edema Area (µm²)", p75EDA]); sh.append(["Mean Edema Area (µm²)", meanEDA])
         sh.append(["Standard Deviation Edema Area (µm²)", stdEDA])
+
+    if eye_widths:
+        medEW,p25EW,p75EW,meanEW,stdEW = _stats(eye_widths, 'eye_area')
+        sh.append(["Median Eye Width (µm)", medEW]); sh.append(["25th Percentile Eye Width (µm)", p25EW])
+        sh.append(["75th Percentile Eye Width (µm)", p75EW]); sh.append(["Mean Eye Width (µm)", meanEW])
+        sh.append(["Standard Deviation Eye Width (µm)", stdEW])
+
+    if eye_heights:
+        medEH,p25EH,p75EH,meanEH,stdEH = _stats(eye_heights, 'eye_area')
+        sh.append(["Median Eye Height (µm)", medEH]); sh.append(["25th Percentile Eye Height (µm)", p25EH])
+        sh.append(["75th Percentile Eye Height (µm)", p75EH]); sh.append(["Mean Eye Height (µm)", meanEH])
+        sh.append(["Standard Deviation Eye Height (µm)", stdEH])
 
     sh.append([]); sh.append(["Class Distribution"])
     cls_counts = [0,0,0,0,0]
@@ -732,7 +754,7 @@ def process(folder,
             f"(H=W=5885 µm over {model_target_size} px)"
         )
 
-    fish_lengths, curvatures, ratios, eye_areas, edema_areas, previews = [], [], [], [], [], []
+    fish_lengths, curvatures, ratios, eye_areas, edema_areas, eye_widths, eye_heights, previews = [], [], [], [], [], [], [], []
     for i, seg_mask in enumerate(segmented_images):
         path_points = None
         straight_line_points = None
@@ -792,9 +814,14 @@ def process(folder,
                     spacing=(y_scale, x_scale),
                 )
                 eye_areas.append(float(eye_info.get("eye_area", 0.0)))
+                diam_info = compute_eye_diameters(eye_mask_for_metrics, spacing=(y_scale, x_scale))
+                eye_widths.append(diam_info["eye_width_um"])
+                eye_heights.append(diam_info["eye_height_um"])
             except Exception as e:
                 print(f"Error calculating eye metrics for image {i}: {e}")
                 eye_areas.append(None)
+                eye_widths.append(None)
+                eye_heights.append(None)
 
         if process_edema:
             try:
@@ -851,6 +878,8 @@ def process(folder,
         'ratios': ratios,
         'eye_areas': eye_areas,
         'edema_areas': edema_areas,
+        'eye_widths': eye_widths,
+        'eye_heights': eye_heights,
         'boxplot_png': boxplot_png,
         'threshold_used': use_threshold,
         'threshold_value': threshold_value,
@@ -896,6 +925,8 @@ def _generate_corrected_excel(data, sheet_name="Fish Data"):
         data.get('boxplot_png', None),
         sheet_name=sheet_name,
         exclusions=data.get('exclusions', {}),
+        eye_widths=data.get('eye_widths', []),
+        eye_heights=data.get('eye_heights', []),
     )
     fd, out_xlsx = tempfile.mkstemp(suffix='.xlsx', prefix='fish_data_')
     os.close(fd)
