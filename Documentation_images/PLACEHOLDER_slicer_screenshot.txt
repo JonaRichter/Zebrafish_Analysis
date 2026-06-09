@@ -1,0 +1,1 @@
+PLACEHOLDER: Replace with actual Slicer Extension screenshot (recommended: 1280x800px) before submitting PR to ExtensionsIndex.

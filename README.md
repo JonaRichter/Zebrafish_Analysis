@@ -18,11 +18,31 @@ zebrafish_analysis/
 └── slicer_extension/ZebrafishAnalysis/  — 3D Slicer extension
 ```
 
+## Installation (3D Slicer)
+
+1. Open 3D Slicer 5.x
+2. Go to **Edit → Application Settings → Modules → Additional module paths**
+3. Add the path to `zebrafish_analysis/slicer_extension/ZebrafishAnalysis/`
+4. Restart Slicer
+5. On first run, required Python packages are installed automatically (requires internet access, ~2 min)
+
+> **Note:** The extension downloads deep learning models (~500 MB) from Hugging Face Hub on first use.
+
 ## Running the Slicer extension
 
 Install 3D Slicer 5.x, open Extension Wizard, point to
 `zebrafish_analysis/slicer_extension/ZebrafishAnalysis/`.
 Dependencies are installed automatically on first load.
+
+## Models
+
+All models are hosted on Hugging Face and downloaded automatically on first use:
+
+| Model | Repository | Purpose |
+|---|---|---|
+| Body segmentation (VGG19) | `markdanielarndt/Zebrafish_Segmentation` | Fish body mask |
+| Eye segmentation | `markdanielarndt/Zebrafish_Segmentation` | Eye region mask |
+| Curvature classifier (ConvNeXt) | `markdanielarndt/Classification` | Curvature grade 1–4 |
 
 # 🐟 Zebrafish Segmentation Web App
 
